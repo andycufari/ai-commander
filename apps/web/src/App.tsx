@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Event } from "@aicommander/protocol";
+import type { PanelSide } from "@aicommander/protocol";
 import { connect, echoUser, initialState, reduce, type ChatRow, type Connection, type UiState } from "./ws.js";
+import { GUTTER_STEP, useGutterDrag, usePanelLayout } from "./panels.js";
 
-/** M0 shell: top line, one panel with the chat view, bottom prompt, status, F-bar.
- *  Two panels, tabs and the files view arrive in M1. */
+/** The shell: top line, two panels with a draggable gutter, status line, F-bar.
+ *  Tabs and the files view land in the next M1 steps. */
 
 export function App(): JSX.Element {
   const [state, dispatch] = useReducer(
@@ -66,20 +68,105 @@ export function App(): JSX.Element {
   }, [state.status, cancel]);
 
   const running = state.status === "running";
+  const colsRef = useRef<HTMLDivElement>(null);
+  const layout = usePanelLayout({});
+  const drag = useGutterDrag(colsRef, layout.setGutter);
+
+  // Global keys (§11): Tab swaps focus, ⌃←/→ resizes, ⌃B collapses, Esc cancels.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const typing = (e.target as HTMLElement | null)?.tagName === "TEXTAREA";
+
+      if (e.key === "Escape" && state.status === "running") {
+        e.preventDefault();
+        cancel();
+        return;
+      }
+      // Tab swaps panels, but must still indent inside the prompt.
+      if (e.key === "Tab" && !typing) {
+        e.preventDefault();
+        layout.swapFocus();
+        return;
+      }
+      if (e.ctrlKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        layout.setGutter((g) => g - GUTTER_STEP);
+        return;
+      }
+      if (e.ctrlKey && e.key === "ArrowRight") {
+        e.preventDefault();
+        layout.setGutter((g) => g + GUTTER_STEP);
+        return;
+      }
+      if (e.ctrlKey && (e.key === "b" || e.key === "B")) {
+        e.preventDefault();
+        layout.toggleCollapse();
+        return;
+      }
+      if (e.key === "F10") e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [state.status, cancel, layout]);
+
+  const colsClass = [
+    "cols",
+    layout.collapsed === "left" ? "collapsed-left" : "",
+    layout.collapsed === "right" ? "collapsed-right" : "",
+  ].filter(Boolean).join(" ");
+
+  const chat = (
+    <>
+      <div className="t">chat{sessionName(state) ? ` · ${sessionName(state)}` : ""}</div>
+      <div className="tr">
+        {running ? <span className="amber">running</span>
+          : `${state.sessions.length} session${state.sessions.length === 1 ? "" : "s"}`}
+      </div>
+      <Chat rows={state.rows} running={running} />
+      <Prompt onSend={send} running={running} queued={state.queued} focused={layout.focus === "left"} />
+    </>
+  );
 
   return (
-    <div className="screen">
+    <div className="screen" style={{ ["--gutter" as string]: String(layout.gutter) }}>
       <TopLine state={state} />
-      <div className="cols">
-        <div className="blk focus">
-          <div className="t">chat{sessionName(state) ? ` · ${sessionName(state)}` : ""}</div>
-          <div className="tr">{running ? <span className="amber">running</span> : `${state.sessions.length} session${state.sessions.length === 1 ? "" : "s"}`}</div>
-          <Chat rows={state.rows} running={running} />
-          <Prompt onSend={send} running={running} queued={state.queued} />
-        </div>
+      <div className={colsClass} ref={colsRef}>
+        <Panel side="left" focus={layout.focus} collapsed={layout.collapsed} onFocus={layout.setFocus}>
+          {chat}
+        </Panel>
+        <div
+          className={drag.dragging ? "gutter dragging" : "gutter"}
+          onPointerDown={drag.onPointerDown}
+          title="drag, or ⌃← / ⌃→"
+        />
+        <Panel side="right" focus={layout.focus} collapsed={layout.collapsed} onFocus={layout.setFocus}>
+          <div className="t">panel</div>
+          <div className="body dim empty">files view · M1 step 3</div>
+        </Panel>
       </div>
-      <StatusLine state={state} />
-      <FKeys />
+      <StatusLine state={state} layout={layout} />
+      <FKeys focus={layout.focus} />
+    </div>
+  );
+}
+
+function Panel({
+  side, focus, collapsed, onFocus, children,
+}: {
+  side: PanelSide;
+  focus: PanelSide;
+  collapsed: PanelSide | null;
+  onFocus: (s: PanelSide) => void;
+  children: React.ReactNode;
+}): JSX.Element {
+  const cls = [
+    "blk",
+    focus === side ? "focus" : "",
+    collapsed === side ? "hidden" : "",
+  ].filter(Boolean).join(" ");
+  return (
+    <div className={cls} onMouseDown={() => onFocus(side)}>
+      {children}
     </div>
   );
 }
@@ -169,8 +256,8 @@ function Row({ row }: { row: ChatRow }): JSX.Element {
 }
 
 function Prompt({
-  onSend, running, queued,
-}: { onSend: (text: string) => void; running: boolean; queued?: string }): JSX.Element {
+  onSend, running, queued, focused,
+}: { onSend: (text: string) => void; running: boolean; queued?: string; focused: boolean }): JSX.Element {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -183,9 +270,11 @@ function Prompt({
     el.style.height = `${Math.min(el.scrollHeight, max)}px`;
   }, [text]);
 
+  // Only hold the caret while this panel has focus, so Tab can leave it.
   useEffect(() => {
-    ref.current?.focus();
-  }, []);
+    if (focused) ref.current?.focus();
+    else ref.current?.blur();
+  }, [focused]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -223,7 +312,9 @@ function Prompt({
   );
 }
 
-function StatusLine({ state }: { state: UiState }): JSX.Element {
+function StatusLine({
+  state, layout,
+}: { state: UiState; layout: { focus: string; other: string; gutter: number } }): JSX.Element {
   const running = state.status === "running";
   return (
     <div className="status">
@@ -241,6 +332,7 @@ function StatusLine({ state }: { state: UiState }): JSX.Element {
           <span>⇧⏎ newline</span>
         </>
       )}
+      <span>Tab → {layout.other}</span>
       <div className="r">
         {state.error && <span className="red">{state.error}</span>}
         {state.queued && <span className="amber">1 queued</span>}
@@ -249,8 +341,9 @@ function StatusLine({ state }: { state: UiState }): JSX.Element {
   );
 }
 
-/** Chat-focused bar (§11). Unbuilt keys are dimmed until their milestone lands. */
-const KEYS: [string, string, boolean][] = [
+/** §11: the F-bar is context-relative — it shows what the keys do *here*.
+ *  `live` marks a key that is actually wired; the rest are dim until their step lands. */
+const CHAT_KEYS: [string, string, boolean][] = [
   ["F1", "help", false],
   ["F2", "+ attach", false],
   ["F3", "sessions", false],
@@ -263,10 +356,24 @@ const KEYS: [string, string, boolean][] = [
   ["F10", "quit", false],
 ];
 
-function FKeys(): JSX.Element {
+const FILES_KEYS: [string, string, boolean][] = [
+  ["F1", "help", false],
+  ["F2", "menu", false],
+  ["F3", "view", false],
+  ["F4", "edit", false],
+  ["F5", "copy", false],
+  ["F6", "move", false],
+  ["F7", "mkdir", false],
+  ["F8", "delete", false],
+  ["F9", "upload", false],
+  ["F10", "quit", false],
+];
+
+function FKeys({ focus }: { focus: PanelSide }): JSX.Element {
+  const keys = focus === "left" ? CHAT_KEYS : FILES_KEYS;
   return (
     <div className="fkeys">
-      {KEYS.map(([key, label, live]) => (
+      {keys.map(([key, label, live]) => (
         <span key={key}>
           <b>{key}</b>
           <span className={live ? "ctx" : undefined}>{label}</span>

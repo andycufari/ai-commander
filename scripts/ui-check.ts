@@ -149,6 +149,61 @@ export async function assertPromptAttached(page: Page): Promise<void> {
   check("transcript does not overlap the prompt", m.bodyBottom <= m.promptTop + 1, m);
 }
 
+/** Two panels split by a gutter that sits where the layout says it does. */
+export async function assertPanels(page: Page): Promise<void> {
+  const m = await page.eval<{
+    panels: number; gutter: Box | null; left: Box | null; right: Box | null;
+    cols: Box | null; focused: number; collapsed: boolean;
+  }>(`(() => {
+    const box = (el) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { top: r.top, right: r.right, bottom: r.bottom, left: r.left, width: r.width, height: r.height };
+    };
+    const blks = [...document.querySelectorAll('.cols > .blk')];
+    return {
+      panels: blks.length,
+      gutter: box(document.querySelector('.cols > .gutter')),
+      left: box(blks[0]),
+      right: box(blks[1]),
+      cols: box(document.querySelector('.cols')),
+      focused: document.querySelectorAll('.cols > .blk.focus').length,
+      collapsed: document.querySelectorAll('.cols > .blk.hidden').length > 0,
+    };
+  })()`);
+
+  check("two panels are present", m.panels === 2, { panels: m.panels });
+  check("a gutter sits between them", m.gutter !== null);
+  check("exactly one panel has focus", m.focused === 1, { focused: m.focused });
+
+  if (m.left && m.right && m.gutter && m.cols) {
+    check("panels do not overlap the gutter",
+      m.left.right <= m.gutter.left + 1 && m.right.left >= m.gutter.right - 1,
+      { left: m.left.right, gutter: [m.gutter.left, m.gutter.right], right: m.right.left });
+    if (!m.collapsed) {
+      check("panels fill the row", Math.abs((m.left.width + m.gutter.width + m.right.width) - m.cols.width) < 2,
+        { left: m.left.width, gutter: m.gutter.width, right: m.right.width, cols: m.cols.width });
+    }
+  }
+}
+
+/** The gutter must sit at the fraction the layout claims — this is what a persisted
+ *  workspace.json restores, so a drift here means a restore silently did nothing. */
+export async function assertGutterAt(page: Page, expected: number, tolerance = 0.02): Promise<void> {
+  const actual = await page.eval<number | null>(`(() => {
+    const cols = document.querySelector('.cols');
+    const left = document.querySelector('.cols > .blk');
+    if (!cols || !left) return null;
+    const c = cols.getBoundingClientRect(), l = left.getBoundingClientRect();
+    return c.width > 0 ? l.width / c.width : null;
+  })()`);
+  check(
+    `gutter sits at ${expected.toFixed(2)} of the row`,
+    actual !== null && Math.abs(actual - expected) <= tolerance,
+    { expected, actual },
+  );
+}
+
 /* ------------------------------------------------------------------ */
 
 async function main(): Promise<void> {
@@ -166,6 +221,30 @@ async function main(): Promise<void> {
 
     group("shell chrome");
     await assertShellChrome(page);
+
+    group("panels");
+    await assertPanels(page);
+    await assertGutterAt(page, 0.5);
+
+    group("gutter keys");
+    // ⌃→ widens the left panel by one 5% step (§10/§11).
+    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',ctrlKey:true,bubbles:true}))`);
+    await sleep(200);
+    await assertGutterAt(page, 0.55);
+    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',ctrlKey:true,bubbles:true}))`);
+    await sleep(200);
+    await assertGutterAt(page, 0.5);
+    // Still no overflow after resizing.
+    await assertNoOverflow(page);
+
+    group("focus");
+    const before = await page.eval<string>("document.querySelector('.cols > .blk.focus')?.className ?? ''");
+    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}))`);
+    await sleep(200);
+    const after = await page.eval<string>("[...document.querySelectorAll('.cols > .blk')].findIndex(e=>e.classList.contains('focus'))");
+    check("Tab moves focus to the other panel", String(after) === "1", { before, afterIndex: after });
+    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}))`);
+    await sleep(200);
 
     group("layout");
     await assertNoOverflow(page);

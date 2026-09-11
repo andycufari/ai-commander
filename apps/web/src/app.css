@@ -45,8 +45,33 @@ html, body, #root {
 .topline .hi { color: var(--hi); }
 .topline .amber { color: var(--amber); }
 
-/* M0 is one panel; the two-column grid arrives with M1. */
-.cols { display: grid; grid-template-columns: 1fr; min-height: 0; }
+/* Two panels with a draggable gutter between them (§10). The column widths come
+   from --gutter so a drag is one custom-property write, not a re-layout in JS.
+   --gutter is the left panel's share of the whole row, so the right column must be
+   its complement: `0.5fr 1fr` would be a 1:2 split, not the half it reads as. */
+.cols {
+  display: grid;
+  grid-template-columns:
+    minmax(0, calc(var(--gutter, 0.5) * (100% - 6px)))
+    6px
+    minmax(0, 1fr);
+  min-height: 0;
+}
+.cols.collapsed-left { grid-template-columns: 0 6px minmax(0, 1fr); }
+.cols.collapsed-right { grid-template-columns: minmax(0, 1fr) 6px 0; }
+
+.gutter {
+  cursor: col-resize;
+  display: grid;
+  place-items: center;
+  color: var(--line);
+  user-select: none;
+}
+.gutter::before { content: "┊"; }
+.gutter:hover, .gutter.dragging { color: var(--hi); }
+
+/* A collapsed panel keeps its box in the grid but paints nothing. */
+.blk.hidden { display: none; }
 
 /* ratatui block: border with the title cut into it */
 .blk {
@@ -72,6 +97,7 @@ html, body, #root {
 }
 
 .body { overflow-y: auto; flex: 1; min-height: 0; }
+.body.empty { display: grid; place-items: center; color: var(--dim); }
 .body.wrap { white-space: normal; }
 
 /* chat rows */
