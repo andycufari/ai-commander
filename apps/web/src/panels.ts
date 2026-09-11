@@ -21,6 +21,8 @@ export interface PanelLayout {
   /** Which panel is maximised, if any. */
   maximized: PanelSide | null;
   toggleMaximize: (side: PanelSide) => void;
+  /** Back to an even split — a panel dragged to a sliver has no other way back. */
+  resetGutter: () => void;
   setGutter: (v: number | ((prev: number) => number)) => void;
   setFocus: (side: PanelSide) => void;
   toggleCollapse: () => void;
@@ -86,8 +88,14 @@ export function usePanelLayout(init: LayoutInit = {}): PanelLayout {
     onChange?.({ gutter, focus, collapsed });
   }, [gutter, focus, collapsed, onChange]);
 
+  const resetGutter = useCallback(() => {
+    setMaximized(null);
+    restoreGutter.current = 0.5;
+    setGutterRaw(0.5);
+  }, []);
+
   return {
-    gutter, focus, collapsed, maximized,
+    gutter, focus, collapsed, maximized, resetGutter,
     setGutter, setFocus, toggleCollapse, toggleMaximize, swapFocus,
     other: focus === "left" ? "right" : "left",
   };

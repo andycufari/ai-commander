@@ -45,6 +45,7 @@ export const BINDINGS: Binding[] = [
   { id: "context", label: "context", hint: "⌘I", chord: { key: "i", mod: true } },
   { id: "openFolder", label: "open", hint: "⌘O", chord: { key: "o", mod: true } },
   { id: "collapse", label: "collapse", hint: "⌘B", chord: { key: "b", mod: true } },
+  { id: "even", label: "even split", hint: "⌘0", chord: { key: "0", mod: true } },
   { id: "maximize", label: "maximize", hint: "⌘⇧↵", chord: { key: "Enter", mod: true, shift: true } },
   { id: "compact", label: "compact", hint: "⌘K C", leader: "c" },
   { id: "clear", label: "clear", hint: "⌘K L", leader: "l" },
@@ -78,9 +79,11 @@ export function resolveLeader(key: string): Binding | undefined {
 /** The bar along the bottom — what the keys do *here* (§11). */
 export function barFor(view: string | undefined): Binding[] {
   const ids = view === "files"
-    ? ["help", "menu", "file", "openFolder", "collapse", "maximize", "newTab", "closeTab", "settings"]
+    // `attach` and `system` earn their place here too: you browse files in this panel,
+    // and both are otherwise only reachable by a chord nobody has memorised yet.
+    ? ["help", "menu", "attach", "file", "system", "collapse", "maximize", "closeTab", "settings"]
     : view === "editor" || view === "viewer"
       ? ["help", "menu", "file", "touched", "collapse", "maximize", "closeTab", "settings"]
-      : ["help", "menu", "attach", "file", "touched", "sessions", "context", "compact", "settings"];
+      : ["help", "menu", "attach", "file", "touched", "system", "context", "compact", "settings"];
   return ids.map(byId).filter((b): b is Binding => b !== undefined);
 }

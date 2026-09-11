@@ -32,3 +32,17 @@ describe("clampGutter", () => {
     expect(g).toBe(GUTTER_MAX);
   });
 });
+
+describe("gutter reset", () => {
+  it("clamping cannot strand a panel below the minimum", () => {
+    // A panel dragged to a sliver must still be reachable; the floor is the guarantee.
+    let g = 0.5;
+    for (let i = 0; i < 20; i += 1) g = clampGutter(g - GUTTER_STEP);
+    expect(g).toBe(GUTTER_MIN);
+    expect(g).toBeGreaterThan(0);
+  });
+
+  it("an even split is exactly half", () => {
+    expect(clampGutter(0.5)).toBe(0.5);
+  });
+});

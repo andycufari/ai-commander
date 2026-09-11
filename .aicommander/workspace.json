@@ -7,13 +7,19 @@
     "left": {
       "tabs": [
         {
-          "view": "chat"
+          "view": "files",
+          "path": ".",
+          "viewer": "text"
         }
       ],
       "active": 0
     },
     "right": {
-      "tabs": [],
+      "tabs": [
+        {
+          "view": "chat"
+        }
+      ],
       "active": 0
     }
   },

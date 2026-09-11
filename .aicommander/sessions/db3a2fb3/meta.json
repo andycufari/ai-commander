@@ -1,0 +1,13 @@
+{
+  "id": "db3a2fb3",
+  "name": "session db3a2fb3",
+  "model": "local-brain",
+  "created": 1789150333010,
+  "snapshots": [
+    {
+      "groupId": "gmtx9z734",
+      "gitRef": "refs/aicommander/db3a2fb3-gmtx9z734"
+    }
+  ],
+  "specialTools": []
+}

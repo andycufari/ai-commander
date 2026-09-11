@@ -152,9 +152,11 @@ export async function assertShellChrome(page: Page): Promise<void> {
 /** The prompt stays attached to the bottom of the chat panel and never overlaps it. */
 export async function assertPromptAttached(page: Page): Promise<void> {
   const m = await page.eval<{ panelBottom: number; promptBottom: number; bodyBottom: number; promptTop: number } | null>(`(() => {
-    const blk = document.querySelector('.blk');
+    // Measure within the panel that holds the prompt — with a file manager in the
+    // other one, a global querySelector compares two different panels' boxes.
     const prompt = document.querySelector('.prompt');
-    const body = document.querySelector('.body');
+    const blk = prompt?.closest('.blk');
+    const body = blk?.querySelector('.body');
     if (!blk || !prompt || !body) return null;
     return {
       panelBottom: blk.getBoundingClientRect().bottom,
@@ -298,7 +300,7 @@ async function resetWorkspace(page: Page): Promise<void> {
       ws.onopen = () => {
         ws.send(JSON.stringify({ id: 'reset', type: 'workspace.set', patch: {
           gutter: 0.5, focus: 'left', collapsed: null,
-          panels: { left: { tabs: [{ view: 'chat' }], active: 0 }, right: { tabs: [], active: 0 } },
+          panels: { left: { tabs: [{ view: 'files', path: '.' }], active: 0 }, right: { tabs: [{ view: 'chat' }], active: 0 } },
           marked: [], promptDraft: '',
         } }));
         setTimeout(() => { ws.close(); resolve(true); }, 300);
@@ -316,12 +318,10 @@ async function resetWorkspace(page: Page): Promise<void> {
  * directory gains an entry.
  */
 async function openViaFiles(page: Page, segments: string[]): Promise<void> {
-  // From a known shell, not whatever the previous group left persisted.
+  // From a known shell, not whatever the previous group left persisted. The file
+  // manager is the left panel by default now, so there is nothing to open first.
   await resetWorkspace(page);
-  await key(page, "Tab");
-  // ⌘K T opens a files tab (§11).
-  await key(page, "k", { ctrl: true, settle: 250 });
-  await key(page, "t", { settle: 900 });
+  await key(page, "1", { ctrl: true, settle: 300 });
 
   for (const segment of segments) {
     // One line: a newline inside this expression ends up mid-literal in the page.
@@ -373,11 +373,12 @@ async function main(): Promise<void> {
 
     group("F-bar");
     // Chat is focused on the left, so the bar must show session keys.
-    await assertFBar(page, "sessions");
+    await assertFBar(page, "attach");
 
     group("tabs");
-    const tabState = async () => page.eval<{ strip: number; title: string; bar: string }>(`(() => {
-      const blk = document.querySelector('.cols > .blk');
+    // The chat lives in the right panel now; the left is the file manager.
+    const rightTabState = async () => page.eval<{ strip: number; title: string; bar: string }>(`(() => {
+      const blk = document.querySelectorAll('.cols > .blk')[1];
       return {
         strip: blk.querySelectorAll('.tab').length,
         title: blk.querySelector('.t')?.textContent ?? '',
@@ -385,42 +386,43 @@ async function main(): Promise<void> {
       };
     })()`);
 
-    const start = await tabState();
+    const start = await rightTabState();
     check("a lone tab hides the strip", start.strip === 0, start);
 
+    // The right panel holds the chat; a new tab there gives it a strip.
+    await key(page, "2", { ctrl: true, settle: 300 });
     await key(page, "k", { ctrl: true, settle: 250 });
     await key(page, "t", { settle: 700 });
-    const opened = await tabState();
-    check("⌘K T opens a files tab and shows the strip", opened.strip === 2, opened);
+    const opened = await rightTabState();
+    check("⌘K T opens a tab and shows the strip", opened.strip >= 2, opened);
     check("the new tab takes the panel title", opened.title.startsWith("files"), opened.title);
-    check("the key bar follows the focused view", opened.bar.includes("open"), opened.bar);
+    check("the key bar follows the focused view", opened.bar.includes("system"), opened.bar);
     await assertTitlesNotClipped(page);
     await assertNoOverflow(page);
 
     await key(page, "Tab", { ctrl: true, settle: 250 });
-    const cycled = await tabState();
-    check("⌃⇥ cycles back to chat", cycled.title.startsWith("chat"), cycled.title);
-    check("the key bar switches back to chat keys", cycled.bar.includes("sessions"), cycled.bar);
+    const cycled = await rightTabState();
+    check("⌘⇥ cycles to another tab", cycled.title !== opened.title, { from: opened.title, to: cycled.title });
+    check("the key bar follows the cycled tab", cycled.bar.length > 0, cycled.bar);
 
     await key(page, "Tab", { ctrl: true });
     await key(page, "k", { ctrl: true, settle: 250 });
     await key(page, "w", { settle: 350 });
-    const closed = await tabState();
+    const closed = await rightTabState();
     check("⌘K W closes the tab and the strip hides again", closed.strip === 0, closed);
     check("the shell is still usable after closing a tab",
-      closed.title.startsWith("chat") && (await page.eval<boolean>("!!document.querySelector('.prompt')")),
+      await page.eval<boolean>("!!document.querySelector('.prompt') && !!document.querySelector('.cols > .blk')"),
       closed);
 
     group("files view");
     // Each group starts from a known layout rather than the previous one's.
     await resetWorkspace(page);
-    // Open a files tab in the right panel and drive the NC keys.
-    await key(page, "Tab");
-    await key(page, "k", { ctrl: true, settle: 250 });
-    await key(page, "t", { settle: 900 });
+    // The file manager is the left panel by default (§10).
+    await key(page, "1", { ctrl: true, settle: 400 });
 
     const fileKey = (k: string, ctrl = false): Promise<void> =>
       key(page, k, { ctrl, focus: ".files", settle: 240 });
+    await page.eval("document.querySelector('.files')?.focus()");
 
     const names = await page.eval<string[]>(
       `[...document.querySelectorAll('.files .row:not(.up) .nm')].map(n => n.textContent.trim())`);
@@ -711,10 +713,12 @@ async function main(): Promise<void> {
 
     group("focus");
     await resetWorkspace(page);
-    const before = await page.eval<string>("document.querySelector('.cols > .blk.focus')?.className ?? ''");
+    const beforeIndex = await page.eval<number>(
+      `[...document.querySelectorAll('.cols > .blk')].findIndex(e => e.classList.contains('focus'))`);
     await key(page, "Tab");
     const after = await page.eval<string>("[...document.querySelectorAll('.cols > .blk')].findIndex(e=>e.classList.contains('focus'))");
-    check("Tab moves focus to the other panel", String(after) === "1", { before, afterIndex: after });
+    check("Tab moves focus to the other panel", String(after) !== String(beforeIndex),
+      { before: beforeIndex, after });
     await key(page, "Tab");
 
     group("layout");

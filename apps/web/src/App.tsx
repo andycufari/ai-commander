@@ -152,6 +152,7 @@ export function App(): JSX.Element {
   const live = useRef<{
     onShowFiles: (e: Extract<Event, { type: "show_files" }>) => void;
     onJobStart: (e: Extract<Event, { type: "job.start" }>) => void;
+    onSessionEvents: (e: Extract<Event, { type: "session.events" }>) => void;
   }>();
 
   useEffect(() => {
@@ -159,6 +160,7 @@ export function App(): JSX.Element {
       (e) => {
         if (e.type === "show_files") live.current?.onShowFiles(e);
       if (e.type === "job.start") live.current?.onJobStart(e);
+      if (e.type === "session.events") live.current?.onSessionEvents(e);
         dispatch(e);
       },
       () => dispatch({ type: "__conn", connected: true }),
@@ -207,10 +209,15 @@ export function App(): JSX.Element {
   const drag = useGutterDrag(colsRef, layout.setGutter);
 
   // Each panel is a tabbed view host (§10). The chat tab is always there to start.
+  // §10: a file manager on the left, the conversation on the right — the Norton
+  // Commander arrangement the whole app is named for. Opening a file from the left
+  // lands it on the right, beside the chat rather than on top of the tree.
   const left = usePanelTabs([
+    { id: "files", view: "files", title: "files", path: ".", dirty: false, conflict: false, missing: false },
+  ], "files");
+  const right = usePanelTabs([
     { id: "chat", view: "chat", title: "chat", dirty: false, conflict: false, missing: false },
   ], "chat");
-  const right = usePanelTabs([]);
   const focused = layout.focus === "left" ? left : right;
 
   // Restore the saved tabs once, as soon as the workspace lands (v2 §4).
@@ -269,14 +276,18 @@ export function App(): JSX.Element {
    */
   const targetSideFor = useCallback((prefer?: PanelSide): PanelSide => {
     if (prefer) return prefer;
+    // A file never lands on top of the file manager — that is the panel you are
+    // browsing from, and replacing it loses your place.
+    const leftIsFiles = left.active?.view === "files";
+    const rightIsFiles = right.active?.view === "files";
+    if (leftIsFiles && !rightIsFiles) return "right";
+    if (rightIsFiles && !leftIsFiles) return "left";
+    // Otherwise keep the conversation where it is.
     const leftIsChat = left.active?.view === "chat";
     const rightIsChat = right.active?.view === "chat";
     if (leftIsChat && !rightIsChat) return "right";
     if (rightIsChat && !leftIsChat) return "left";
-    if (leftIsChat && rightIsChat) return layoutRef.current.focus === "left" ? "right" : "left";
-    // Neither side holds a chat: reuse whichever already has this kind of thing open,
-    // which in practice means the panel the user has been reading in.
-    return right.tabs.length >= left.tabs.length ? "right" : "left";
+    return layoutRef.current.focus === "left" ? "right" : "left";
   }, [left, right]);
 
   /**
@@ -327,6 +338,15 @@ export function App(): JSX.Element {
    * keeps the handler current without re-subscribing the socket.
    */
   live.current = {
+    // ⌘K N asked for a session: give it its own chat tab beside the current one.
+    onSessionEvents: (e) => {
+      if (!wantNewChatTab.current) return;
+      wantNewChatTab.current = false;
+      const side: PanelSide = right.tabs.some((t) => t.view === "chat") ? "right" : "left";
+      const host = side === "left" ? left : right;
+      host.open({ view: "chat", title: "chat", sessionId: e.sessionId, session: e.sessionId });
+      layout.setFocus(side);
+    },
     // Guard 4: a shell call that became a job gets its own log tab, in the panel the
     // user is not reading — the same rule as show_files.
     onJobStart: (e) => {
@@ -388,6 +408,8 @@ export function App(): JSX.Element {
   const [skills, setSkills] = useState<{ name: string; description: string }[]>([]);
   const [images, setImages] = useState<{ file: string; name: string }[]>([]);
   const skillsWarned = useRef(false);
+  /** Set while ⌘K N is in flight, so the reply opens a tab instead of taking over. */
+  const wantNewChatTab = useRef(false);
   const [compactPlan, setCompactPlan] = useState<
     { groups: number; before: number; after: number; files: string[] } | undefined
   >();
@@ -432,7 +454,12 @@ export function App(): JSX.Element {
       .catch(() => setTree([]));
   }, []);
 
+  /**
+   * A new session opens as a new chat tab beside the current one. Replacing the
+   * conversation you are in is what /clear is for; ⌘K N should never lose a thread.
+   */
   const newSession = useCallback(() => {
+    wantNewChatTab.current = true;
     conn.current?.send({ type: "session.create" });
   }, []);
 
@@ -510,10 +537,16 @@ export function App(): JSX.Element {
       case "help":
         setPick("help");
         return;
-      case "files":
-        loadTree();
-        setPick("files");
+      case "files": {
+        // Focus the file manager where it already lives rather than opening a second.
+        const side: PanelSide = left.tabs.some((t) => t.view === "files") ? "left" : "right";
+        const host = side === "left" ? left : right;
+        const tab = host.tabs.find((t) => t.view === "files");
+        if (tab) host.select(tab.id);
+        else host.open({ view: "files", title: "files", path: "." });
+        layout.setFocus(side);
         return;
+      }
       case "touched":
         setPick("touched");
         return;
@@ -571,6 +604,7 @@ export function App(): JSX.Element {
         return;
       }
       case "collapse": layoutRef.current.toggleCollapse(); return;
+      case "even": layoutRef.current.resetGutter(); return;
       case "context":
         // The inspector goes in the panel that is not holding the chat, like any view.
         openView("inspector", "context");
@@ -642,6 +676,12 @@ export function App(): JSX.Element {
         focusedRef.current.cycle(e.shiftKey ? -1 : 1);
         return;
       }
+      // ⌘0 returns to an even split, the way a zoom reset does.
+      if (hasMod(e) && e.key === "0") {
+        e.preventDefault();
+        layout.resetGutter();
+        return;
+      }
       if (hasMod(e) && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
         e.preventDefault();
         layout.setGutter((g) => g + (e.key === "ArrowRight" ? GUTTER_STEP : -GUTTER_STEP));
@@ -650,6 +690,14 @@ export function App(): JSX.Element {
       if (hasMod(e) && (e.key === "1" || e.key === "2")) {
         e.preventDefault();
         layout.setFocus(e.key === "1" ? "left" : "right");
+        return;
+      }
+      // ⌥1..9 selects a tab within the focused panel — ⌘⇥ cycles, but jumping
+      // straight to one is what you want once a panel holds more than two.
+      if (e.altKey && !hasMod(e) && /^[1-9]$/.test(e.key)) {
+        e.preventDefault();
+        const tab = focusedRef.current.tabs[Number(e.key) - 1];
+        if (tab) focusedRef.current.select(tab.id);
         return;
       }
 
@@ -792,7 +840,8 @@ export function App(): JSX.Element {
         <div
           className={drag.dragging ? "gutter dragging" : "gutter"}
           onPointerDown={drag.onPointerDown}
-          title="drag, or ⌃← / ⌃→"
+          onDoubleClick={layout.resetGutter}
+          title="drag · ⌘← ⌘→ to step · ⌘0 or double-click to even it up"
         />
         <Panel
           side="right" focus={layout.focus} collapsed={layout.collapsed}
@@ -816,6 +865,8 @@ export function App(): JSX.Element {
               ? [{ id: "sessions", label: "existing session…", detail: `${state.sessions.length}`, group: "session" }]
               : []),
             { id: "files", label: "files", detail: "browse the repo", group: "open" },
+            { id: "system", label: "system prompt", detail: "⌘⇧M · what the brain is told", group: "open" },
+            { id: "context", label: "context inspector", detail: "⌘I · what the last turn sent", group: "open" },
             { id: "file", label: "file…", detail: "⌃P", group: "open" },
             { id: "touched", label: "files this session touched", detail: "⌃⇧P", group: "open" },
           ]}
@@ -829,6 +880,8 @@ export function App(): JSX.Element {
                 return;
               case "file": loadTree(); setPick("files"); return;
               case "touched": setPick("touched"); return;
+              case "system": setPick(null); runAction("system"); return;
+              case "context": setPick(null); runAction("context"); return;
               default: setPick(null);
             }
           }}
@@ -1109,19 +1162,21 @@ function Panel({
       <div className="tr">
         {extra}
         <i
-          className="max"
-          title={maximized ? "restore" : "maximize (⌘⇧Enter)"}
+          className={maximized ? "max on" : "max"}
+          title={maximized ? "restore (⌘⇧⏎)" : "maximize (⌘⇧⏎)"}
           onMouseDown={(e) => { e.stopPropagation(); onMaximize(side); }}
-        >{maximized ? "▾" : "▴"}</i>
+        >{maximized ? "◧ restore" : "◨ wide"}</i>
       </div>
       {tabs.tabs.length > 1 && (
         <div className="tabs">
-          {tabs.tabs.map((t) => (
+          {tabs.tabs.map((t, i) => (
             <span
               key={t.id}
               className={`tab${t.id === tabs.activeId ? " on" : ""}${t.conflict ? " conflict" : ""}`}
+              title={i < 9 ? `⌥${i + 1}` : undefined}
               onMouseDown={(e) => { e.stopPropagation(); onFocus(side); tabs.select(t.id); }}
             >
+              {i < 9 && <b className="tab-num">{i + 1}</b>}
               {t.title}{t.dirty ? " ●" : ""}{t.missing ? " (missing)" : ""}
               <i
                 className="x"

@@ -102,9 +102,14 @@ html, body, #root {
   max-width: calc(100% - 16px);
   overflow: hidden; white-space: nowrap;
 }
-/* maximize toggle — 80% of the row, so the conversation stays in view */
-.blk > .tr .max { font-style: normal; cursor: pointer; color: var(--dim); }
-.blk > .tr .max:hover { color: var(--hi); }
+/* maximize toggle — 80% of the row, so the conversation stays in view.
+   Bordered rather than a bare glyph: at 11px an unadorned ▴ is invisible. */
+.blk > .tr .max {
+  font-style: normal; cursor: pointer; color: var(--dim);
+  border: 1px solid var(--line); border-radius: 2px; padding: 0 4px;
+}
+.blk > .tr .max:hover { color: var(--hi); border-color: var(--hi); }
+.blk > .tr .max.on { color: var(--amber); border-color: var(--amber); }
 
 /* Tab strip — the v0 mockup's .tabs, inside a ratatui block. */
 .tabs {
@@ -127,6 +132,9 @@ html, body, #root {
   white-space: nowrap;
 }
 .tab.on { color: var(--hi); background: var(--bg); border-color: var(--line); }
+/* the ⌥n that selects this tab — the shortcut is on the thing it acts on */
+.tab .tab-num { color: var(--dim); font-weight: 400; margin-right: 5px; font-size: 10px; }
+.tab.on .tab-num { color: var(--amber); }
 .tab .x { font-style: normal; margin-left: 6px; color: var(--dim); cursor: pointer; }
 .tab .x:hover { color: var(--red); }
 
