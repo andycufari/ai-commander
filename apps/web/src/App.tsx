@@ -3,7 +3,10 @@ import type { Event, PanelSide, Tab } from "@aicommander/protocol";
 import { connect, echoUser, initialState, reduce, type ChatRow, type Connection, type UiState } from "./ws.js";
 import { GUTTER_STEP, useGutterDrag, usePanelLayout } from "./panels.js";
 import { usePanelTabs, type PanelTabs } from "./tabs.js";
-import { BINDINGS, barFor, hasMod, resolve, resolveLeader, type Binding } from "./keys.js";
+import {
+  BINDINGS, barFor, byCommand, commands, hasMod, hint, resolve, resolveLeader, type Binding,
+} from "./keymap.js";
+import { Help } from "./Help.js";
 import { FilesView } from "./FilesView.js";
 import { Editor } from "./Editor.js";
 import { ImageViewer } from "./ImageViewer.js";
@@ -108,25 +111,26 @@ function permissionButtons(tier: "info" | "warning" | "danger"): ModalButton[] {
   ];
 }
 
+/**
+ * Ids runAction knows. Kept beside the switch so the two are edited together, and
+ * asserted against keymap.ts by ui-check — a binding the table offers and the dispatch
+ * ignores is a key that does nothing.
+ */
+const HANDLED = new Set([
+  "focusLeft", "focusRight", "swapFocus", "collapse", "maximize", "even", "widen",
+  "narrow", "cycleTab", "newTab", "closeTab",
+  "help", "menu", "file", "touched", "sessions", "settings", "openFolder", "context",
+  "system", "files", "attach",
+  "newSession", "clear", "rewind",
+  "compact", "cancel",
+]);
+
 /** §5 special tools, opt-in per session with `#`. */
 const SPECIAL_TOOLS = [
   { name: "sql", description: "query .aicommander/data.sqlite", enabled: false },
   { name: "comfyui", description: "run a ComfyUI workflow", enabled: false },
   { name: "cad_render", description: "render a CAD file to STL or PNG", enabled: false },
   { name: "circuit_export", description: "export a KiCad schematic to SVG", enabled: false },
-];
-
-/** §11 slash commands. Anything needing M2/M3 machinery says so rather than
- *  silently doing nothing. */
-const COMMANDS: { name: string; detail: string }[] = [
-  { name: "clear", detail: "empty this session" },
-  { name: "compact", detail: "summarise the older turns" },
-  { name: "new", detail: "new session" },
-  { name: "model", detail: "brain and endpoint" },
-  { name: "files", detail: "open a file" },
-  { name: "touched", detail: "files this session touched" },
-  { name: "help", detail: "every key" },
-  { name: "rewind", detail: "M2" },
 ];
 
 /** The shell: top line, two tabbed panels with a draggable gutter, status line,
@@ -274,8 +278,12 @@ export function App(): JSX.Element {
    * brain wanted to show. Only when both sides are showing chats does it fall back to
    * the side away from focus.
    */
-  const targetSideFor = useCallback((prefer?: PanelSide): PanelSide => {
+  const targetSideFor = useCallback((prefer?: PanelSide, from?: PanelSide): PanelSide => {
     if (prefer) return prefer;
+    // A file opens away from whatever panel asked for it. Clicking a mention in the
+    // chat put the file on top of that same conversation, which is the one place it
+    // must never go.
+    if (from) return from === "left" ? "right" : "left";
     // A file never lands on top of the file manager — that is the panel you are
     // browsing from, and replacing it loses your place.
     const leftIsFiles = left.active?.view === "files";
@@ -297,12 +305,12 @@ export function App(): JSX.Element {
    */
   const openFile = useCallback((
     path: string,
-    opts: { mode?: "view" | "edit"; side?: PanelSide } = {},
+    opts: { mode?: "view" | "edit"; side?: PanelSide; from?: PanelSide } = {},
   ): { outcome: "opened" | "already-open"; side: PanelSide; view: string } => {
     const entry = defaultRegistry.resolve(path);
     // mode "edit" overrides the registry's choice of a rendered view (§5).
     const view = opts.mode === "edit" ? "editor" : entry.view;
-    const side = targetSideFor(opts.side);
+    const side = targetSideFor(opts.side, opts.from);
     const target = side === "left" ? left : right;
 
     const existing = target.tabs.find((t) => t.path === path && t.view === view);
@@ -520,44 +528,66 @@ export function App(): JSX.Element {
    * context assembler or the permission engine is M2/M3; those say so rather than
    * silently doing nothing, which is worse than an honest "not yet".
    */
-  const runCommand = useCallback((id: string, arg?: string): void => {
+  /** A slash command resolves to the same action its chord runs (§11). */
+  const runCommand = useCallback((name: string, arg?: string): void => {
+    const binding = byCommand(name);
+    if (!binding) {
+      toast("warning", `unknown command: /${name}`);
+      return;
+    }
+    runActionRef.current(binding.id, name);
+  }, [toast]);
+
+  /** ⌘K leader: the next key picks an action (§11). */
+  const [leaderArmed, setLeaderArmed] = useState(false);
+  /** When Esc was last pressed, for the Esc Esc chord. */
+  const lastEscape = useRef(0);
+
+  /**
+   * The one dispatch. Every chord, every slash command and every key-bar click lands
+   * here by id — two tables is how `attach` came to share a case label with `rewind`
+   * and open the navigator instead of the picker.
+   */
+  const runAction = useCallback((id: string, arg?: string): void => {
     const sessionId = state.sessionId;
     switch (id) {
-      case "clear":
-        if (sessionId) conn.current?.send({ type: "session.clear", sessionId });
+      case "focusLeft": layoutRef.current.setFocus("left"); return;
+      case "focusRight": layoutRef.current.setFocus("right"); return;
+      case "swapFocus": layoutRef.current.swapFocus(); return;
+      case "collapse": layoutRef.current.toggleCollapse(); return;
+      case "maximize": layoutRef.current.toggleMaximize(layoutRef.current.focus); return;
+      case "even": layoutRef.current.resetGutter(); return;
+      case "widen": layoutRef.current.setGutter((g) => g + GUTTER_STEP); return;
+      case "narrow": layoutRef.current.setGutter((g) => g - GUTTER_STEP); return;
+      case "cycleTab": focusedRef.current.cycle(1); return;
+      case "newTab":
+        focusedRef.current.open({ view: "files", title: "files", path: "." });
         return;
-      case "new":
-      case "newSession":
-        newSession();
+      case "closeTab": {
+        const host = focusedRef.current;
+        if (host.activeId) host.close(host.activeId);
         return;
-      case "model":
-      case "settings":
-        setPick("settings");
-        return;
-      case "help":
-        setPick("help");
-        return;
+      }
+
+      case "help": setPick("help"); return;
+      case "menu": setPick("menu"); return;
+      case "file": loadTree(); setPick("files"); return;
+      case "touched": setPick("touched"); return;
+      case "sessions": setPick("sessions"); return;
+      case "settings": setPick("settings"); return;
+      case "openFolder": loadFolders(); setPick("folders"); return;
+      case "context": openView("inspector", "context"); return;
+      case "system": openFileRef.current(".aicommander/system.md", { mode: "edit" }); return;
       case "files": {
-        // Focus the file manager where it already lives rather than opening a second.
+        // Focus the file manager where it already is rather than opening a second one.
         const side: PanelSide = left.tabs.some((t) => t.view === "files") ? "left" : "right";
         const host = side === "left" ? left : right;
         const tab = host.tabs.find((t) => t.view === "files");
         if (tab) host.select(tab.id);
         else host.open({ view: "files", title: "files", path: "." });
-        layout.setFocus(side);
+        layoutRef.current.setFocus(side);
         return;
       }
-      case "touched":
-        setPick("touched");
-        return;
-      case "compact":
-        // Ask first: compaction rewrites what the brain remembers, and the estimate
-        // is the only way to judge whether it is worth doing yet.
-        if (!sessionId) return;
-        conn.current?.request({ type: "session.compactPlan", sessionId }, "compact.plan")
-          .then((e) => setCompactPlan(e as never))
-          .catch(() => toast("warning", "could not work out what compacting would do"));
-        return;
       case "attach":
         loadTree();
         conn.current?.request({ type: "skills.list" }, "skills.listed")
@@ -574,62 +604,39 @@ export function App(): JSX.Element {
           .catch(() => setSkills([]));
         setPick("attach");
         return;
-      case "rewind":
-        setNavOpen(true);
-        return;
-      default:
-        toast("warning", `unknown command: /${id}`);
-    }
-  }, [state.sessionId, newSession, loadTree, toast]);
 
-  /** ⌘K leader: the next key picks an action (§11). */
-  const [leaderArmed, setLeaderArmed] = useState(false);
-  /** When Esc was last pressed, for the Esc Esc chord. */
-  const lastEscape = useRef(0);
-
-  const runAction = useCallback((id: string) => {
-    switch (id) {
-      case "help": setPick("help"); return;
-      case "menu": setPick("menu"); return;
-      case "file": loadTree(); setPick("files"); return;
-      case "touched": setPick("touched"); return;
-      case "sessions": setPick("sessions"); return;
-      case "settings": setPick("settings"); return;
-      case "openFolder": loadFolders(); setPick("folders"); return;
       case "newSession": newSession(); return;
-      case "newTab": focusedRef.current.open({ view: "files", title: "files", path: "." }); return;
-      case "closeTab": {
-        const host = focusedRef.current;
-        if (host.activeId) host.close(host.activeId);
-        return;
-      }
-      case "collapse": layoutRef.current.toggleCollapse(); return;
-      case "even": layoutRef.current.resetGutter(); return;
-      case "context":
-        // The inspector goes in the panel that is not holding the chat, like any view.
-        openView("inspector", "context");
-        return;
-      case "system":
-        openFile(".aicommander/system.md", { mode: "edit" });
-        return;
-      case "maximize": layoutRef.current.toggleMaximize(layoutRef.current.focus); return;
-      // Each of these has its own handler in runCommand; grouping them under one
-      // label is how attach silently became "open the navigator".
-      case "attach":
-      case "compact":
       case "clear":
-        runCommandRef.current(id);
+        if (sessionId) conn.current?.send({ type: "session.clear", sessionId });
         return;
-      case "rewind":
-        setNavOpen(true);
+      case "rewind": setNavOpen(true); return;
+
+      case "compact":
+        // Ask first: compaction rewrites what the brain remembers, and the estimate is
+        // the only way to judge whether it is worth doing yet.
+        if (!sessionId) return;
+        conn.current?.request({ type: "session.compactPlan", sessionId }, "compact.plan")
+          .then((e) => setCompactPlan(e as never))
+          .catch(() => toast("warning", "could not work out what compacting would do"));
         return;
+      case "cancel": cancel(); return;
+
       default:
-        return;
+        toast("warning", `nothing bound to ${arg ? `/${arg}` : id}`);
     }
-  }, [loadTree, newSession]);
+  }, [state.sessionId, loadTree, loadFolders, newSession, cancel, toast, left, right, openView]);
 
   const runActionRef = useRef(runAction);
   runActionRef.current = runAction;
+
+  // ui-check reads this to assert every binding in the table is handled here (§11).
+  useEffect(() => {
+    (window as unknown as { __keymap?: unknown }).__keymap = {
+      bindings: BINDINGS,
+      hint,
+      handles: (id: string) => HANDLED.has(id),
+    };
+  }, []);
   const runCommandRef = useRef(runCommand);
   runCommandRef.current = runCommand;
 
@@ -727,7 +734,7 @@ export function App(): JSX.Element {
       case "chat":
         return (
           <>
-            <Chat rows={state.rows} running={running} onOpen={(p) => openFile(p)} />
+            <Chat rows={state.rows} running={running} onOpen={(p) => openFile(p, { from: side })} />
             <Prompt
               onSend={send} running={running} queued={state.queued}
               focused={layout.focus === side}
@@ -797,7 +804,7 @@ export function App(): JSX.Element {
               const host = side === "left" ? left : right;
               host.update(tab.id, { path: next, title: next === "." ? "files" : next.split("/").pop()! });
             }}
-            onOpen={(p) => openFile(p)}
+            onOpen={(p) => openFile(p, { from: side })}
             onMention={mention}
           />
         );
@@ -1078,7 +1085,10 @@ export function App(): JSX.Element {
           onClose={() => setPick(null)}
         />
       )}
-            {pick === "attach" && (
+            {pick === "help" && (
+        <Help onRun={(id) => runAction(id)} onClose={() => setPick(null)} />
+      )}
+      {pick === "attach" && (
         <Picker
           tab={pickerTab}
           onTab={setPickerTab}
@@ -1111,17 +1121,7 @@ export function App(): JSX.Element {
           onClose={() => setPick(null)}
         />
       )}
-      {pick === "help" && (
-        <Pick
-          title="keys"
-          placeholder="filter"
-          hint="⏎ run · Esc close"
-          items={BINDINGS.map((b) => ({ id: b.id, label: b.label, detail: b.hint }))}
-          onChoose={(item) => { setPick(null); runAction(item.id); }}
-          onClose={() => setPick(null)}
-        />
-      )}
-      {toasts.length > 0 && (
+            {toasts.length > 0 && (
         <div className="toasts">
           {toasts.map((t) => (
             <div key={t.id} className={`toast ${t.level}`}>{t.text}</div>
@@ -1378,10 +1378,10 @@ function Prompt({
   const suggestions = useMemo(() => {
     if (!completing) return [];
     if (completing.sigil === "/") {
-      return COMMANDS
-        .filter((c) => c.name.startsWith(completing.query.toLowerCase()))
+      return commands()
+        .filter((b) => b.command!.startsWith(completing.query.toLowerCase()))
         .slice(0, 8)
-        .map((c) => ({ value: c.name, detail: c.detail }));
+        .map((b) => ({ value: b.command!, detail: b.describe }));
     }
     return defaultFilter(files.map((f) => ({ id: f, label: f })), completing.query)
       .slice(0, 8)
@@ -1435,7 +1435,7 @@ function Prompt({
       if (!trimmed) return;
       // A line that is only a slash command runs here rather than going to the brain.
       const command = /^\/(\w+)\s*(.*)$/.exec(trimmed);
-      if (command && COMMANDS.some((c) => c.name === command[1]!.toLowerCase())) {
+      if (command && byCommand(command[1]!)) {
         onCommand(command[1]!.toLowerCase(), command[2]);
         setText("");
         return;
@@ -1553,8 +1553,8 @@ function FKeys({
   return (
     <div className="fkeys">
       {bindings.map((b) => (
-        <span key={b.id} className="fkey" onClick={() => onRun(b.id)} title={b.hint}>
-          <b>{b.hint}</b>
+        <span key={b.id} className="fkey" onClick={() => onRun(b.id)} title={b.describe}>
+          <b>{hint(b)}</b>
           <span className="ctx">{b.label}</span>
         </span>
       ))}

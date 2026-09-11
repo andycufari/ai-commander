@@ -242,6 +242,22 @@ html, body, #root {
 .pick-row.sel .pick-detail { color: var(--hi); }
 .pick-empty { color: var(--dim); padding: 4px; }
 
+/* help overlay — rendered from keymap.ts (§11) */
+.help { width: min(90vw, 900px); }
+.help-cols { columns: 2; column-gap: 28px; max-height: 66vh; overflow-y: auto; }
+.help-group { break-inside: avoid; margin-bottom: 10px; }
+.help-head { color: var(--amber); margin-bottom: 2px; }
+.help-row {
+  display: grid;
+  grid-template-columns: minmax(0, 6em) minmax(0, 8em) minmax(0, 1fr) minmax(0, 5em);
+  gap: 8px; padding: 1px 3px; cursor: pointer; white-space: nowrap;
+}
+.help-row:hover { background: var(--sel); }
+.help-chord { color: var(--amber); }
+.help-label { color: var(--ink); }
+.help-describe { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.help-command { color: var(--dim); text-align: right; }
+
 /* options — the v2 form (§10) */
 .options { width: 760px; display: flex; flex-direction: column; gap: 4px; }
 .opt-scopes { display: flex; gap: 10px; margin-bottom: 2px; }

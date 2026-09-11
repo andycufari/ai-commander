@@ -1,0 +1,474 @@
+    1  # AI Commander — BUILDME
+    2  
+    3  > Norton Commander for building with AI. Two panels, a brain, your repo.
+    4  > Local-first desktop harness: chat + tools + file manager + viewers, driven by any OpenAI-compatible model (default: a box on the LAN).
+    5  
+    6  Attachments (read before touching UI):
+    7  - `docs/mockups/v0-layouts.html` — layout studies, A chosen
+    8  - `docs/mockups/v1-commander.html` — Ratatui-style screens, F-key bar, loop, permission, + picker, context stack
+    9  - `docs/mockups/v2-modals-options.html` — modal tiers, options modal, open folder, workspace layout
+   10  
+   11  ---
+   12  
+   13  ## 0. What this is
+   14  
+   15  An IDE-shaped app that is **not** a coding IDE. It's for iterating projects with an LLM: markdown, firmware, CAD, circuits, images, data. It keeps the UX of Claude Code (prompt → tool loop → Esc) and adds what a terminal can't: see the file the brain mentions, navigate the tree, run several sessions, edit a doc or look at a schematic next to the chat.
+   16  
+   17  Non-goals (v1): multi-repo windows, collaborative sessions, cloud sync, plugins marketplace, Windows support.
+   18  
+   19  Principles:
+   20  1. **Keyboard first, mouse welcome.** Every action has a key. The F-bar always shows what the keys do *here*.
+   21  2. **The harness owns context.** User attaches things; the harness decides where they land so the model reads them well and nothing is duplicated.
+   22  3. **Danger always blocks.** No mode, flag, or setting bypasses the permission rules.
+   23  4. **Everything is a file in the repo.** Sessions, config, rules, system prompt, viewers — all under `.aicommander/`, tracked by git by default.
+   24  5. **Terminal look, DOM guts.** Ratatui aesthetics; real DOM so viewers can render CAD and circuits.
+   25  
+   26  ---
+   27  
+   28  ## 1. Stack
+   29  
+   30  | layer | choice | why |
+   31  |---|---|---|
+   32  | language | TypeScript everywhere | one codebase, shared types |
+   33  | UI | React 18 + Vite, no component library, CSS variables | terminal look is custom anyway |
+   34  | editor | CodeMirror 6 | md + code, small, keyboard-native |
+   35  | CAD viewer | three.js (STL/OBJ/glTF loaders); OpenSCAD via `openscad` CLI → STL | good enough for v1 |
+   36  | circuit viewer | `kicad-cli sch export svg` → SVG viewer with pan/zoom; part click → mention | native parser later |
+   37  | backend | Node 22, `ws`, `better-sqlite3`, `execa` | agent loop, tools, sessions |
+   38  | git | shell out to `git` binary | reliability > libraries |
+   39  | brain | OpenAI-compatible `/v1/chat/completions`, streaming, tools | llama.cpp, vLLM, Ollama, OpenRouter, Anthropic via proxy |
+   40  | desktop | Tauri 2, backend as sidecar | light, mac + linux |
+   41  | packaging | pnpm workspaces | |
+   42  
+   43  ```
+   44  ai-commander/
+   45  ├── apps/
+   46  │   ├── web/            React app (also served by the backend for the web phase)
+   47  │   └── desktop/        Tauri shell; spawns backend sidecar; window per repo
+   48  ├── packages/
+   49  │   ├── core/           agent loop, tools, context assembler, permissions, session store, git
+   50  │   ├── protocol/       shared TS types: WS events, tool schemas, config schemas (zod)
+   51  │   └── viewers/        built-in viewers (md, image, video, cad, circuit, table) + plugin loader
+   52  ├── docs/
+   53  │   ├── mockups/        the three HTML files
+   54  │   └── BUILDME.md      this
+   55  └── bin/aicommander     `aicommander serve <repo> [--port]`
+   56  ```
+   57  
+   58  ---
+   59  
+   60  ## 2. Runtime model
+   61  
+   62  - One backend process per repo (`aicommander serve /path/to/repo`). Tauri spawns it; in web mode you run it by hand and open `http://localhost:7777`.
+   63  - Backend exposes: WS `/ws` (events both ways), HTTP `/upload` (multipart → repo path), `/file?path=` (raw file for viewers), `/static` (the web app).
+   64  - UI state lives in the backend, not the browser: reload = same session, same tabs. Browser only renders and sends intents.
+   65  - Backend never runs outside the repo root: every file tool resolves and rejects paths above root (symlinks resolved).
+   66  
+   67  ---
+   68  
+   69  ## 3. Protocol (packages/protocol)
+   70  
+   71  WS messages are `{ id, type, ...payload }`. Client → server are **intents**; server → client are **events**. All typed with zod, exported to both sides.
+   72  
+   73  The envelope `id` is the message's own id: the server echoes it as `error.intentId` and on
+   74  reply events, so a session-scoped intent names its target as `sessionId`, never `id`.
+   75  
+   76  Intents (client → server):
+   77  ```
+   78  session.create { name? }                 session.open { sessionId }
+   79  session.close { sessionId }              session.rename { sessionId, name }
+   80  session.delete { sessionId, confirm: "delete" }
+   81  session.send { sessionId, text, attachments: Attachment[] }     // queues if running
+   82  session.cancel { sessionId }
+   83  session.rewind { sessionId, groupId, mode: "fork"|"truncate" }
+   84  session.dropGroup { sessionId, groupId } session.dropToolOutput { sessionId, groupId }
+   85  session.compact { sessionId }            session.clear { sessionId }
+   86  permission.answer { requestId, answer: "once"|"session"|"deny", editedCommand? }
+   87  ask.answer { requestId, choice }
+   88  panel.opened { requestId, outcome: "opened"|"already-open"|"not-found", side?, view? }
+   89  options.set { scope: "session"|"project"|"global", sessionId?, patch }
+   90  fs.list { path }  fs.tree { limit? }  fs.read { path }  fs.write { path, content, baseHash }  fs.mkdir  fs.rename  fs.copy  fs.move  fs.delete { path, confirm }
+   91  git.status  git.log { path?, n }  git.diff { path? }  git.commit { message }  git.checkout { ref }
+   92  workspace.set { patch }                  workspace.get
+   93  viewer.list                              viewer.install { name }  (after brain writes one)
+   94  ```
+   95  
+   96  Events (server → client):
+   97  ```
+   98  session.state { sessionId, status: "idle"|"running"|"paused"|"cancelled", ctxUsed, ctxMax, toolCount, elapsed, queued? }
+   99  turn.start { sessionId, groupId, role }
+  100  token { sessionId, groupId, delta }                         // streaming brain text
+  101  tool.start { sessionId, groupId, callId, name, args }
+  102  tool.output { callId, delta }                              // streaming shell output
+  103  tool.end { callId, ok, summary, outputPath?, truncated }
+  104  permission.request { requestId, sessionId, tool, command, rule, reason, level }
+  105  ask.request { requestId, sessionId, question, options[] }
+  106  job.start/job.output/job.end { jobId, ... }                // background shell jobs
+  107  open_in_panel { path, viewer?, mode: "view"|"edit", target: "other"|"left"|"right", requestId? }
+  108  mention.add { text }                                       // viewer → prompt
+  109  fs.changed { paths[] }                                     // chokidar
+  110  git.changed { branch, dirty, ahead }
+  111  toast { level: "info"|"warning", text }
+  112  compact.done { sessionId, before, after, summaryPath }
+  113  workspace { ...full state }
+  114  error { intentId?, message }
+  115  ```
+  116  
+  117  Reply events — these carry back the data an intent asked for. Each quotes the requesting
+  118  intent's envelope id as `intentId` so a caller can match a reply to its own request:
+  119  ```
+  120  fs.listed { intentId, path, entries: FsEntry[] }           // ← fs.list
+  121  fs.tree { intentId, paths[], truncated }                   // ← fs.tree (⌃P)
+  122  fs.content { intentId, path, content, hash }               // ← fs.read
+  123  fs.wrote { intentId, path, hash }                          // ← fs.write
+  124  git.result { intentId, action, text }                      // ← any git.* intent
+  125  session.list { sessions: SessionMeta[] }                   // on connect
+  126  session.events { sessionId, meta, groups }                 // replayed log, on open + reconnect
+  127  config { config, root }                                    // merged global+project + repo root, on connect and after options.set
+  128  ```
+  129  
+  130  ---
+  131  
+  132  ## 4. Session model & storage
+  133  
+  134  ```
+  135  .aicommander/
+  136  ├── workspace.json      panels, tabs, gutter, focus, marked files, prompt draft
+  137  ├── config.json         project defaults (schema §9)
+  138  ├── rules.json          permission regexes, merged over ~/.aicommander/rules.json
+  139  ├── system.md           harness manual for the brain (copied from global on first open)
+  140  ├── sessions/
+  141  │   ├── index.sqlite    sessions, groups, tokens, fulltext(messages)
+  142  │   └── <id>/
+  143  │       ├── session.jsonl
+  144  │       ├── meta.json   { id, name, model, created, forkedFrom?, snapshots: [{groupId, gitRef}] }
+  145  │       └── img/
+  146  ├── out/                full tool outputs over the cap: <callId>.txt
+  147  ├── snapshots/          (empty; refs live in .git/refs/aicommander/*)
+  148  └── viewers/<name>/     manifest.json + index.jsx
+  149  ~/.aicommander/         config.json, rules.json, system.md, recents.json
+  150  ```
+  151  
+  152  `session.jsonl` — one event per line, replayable to rebuild UI and context:
+  153  
+  154  ```jsonl
+  155  {"t":"user","id":"g18","ts":...,"text":"...","attachments":[{"kind":"file","path":"firmware/main.c","hash":"..."},{"kind":"skill","name":"esp32-lowpower"},{"kind":"image","file":"img/pcb-v3.jpg"}]}
+  156  {"t":"snapshot","group":"g18","ref":"refs/aicommander/s014-g18"}
+  157  {"t":"brain","id":"g18","text":"...","toolCalls":[...]}
+  158  {"t":"tool","id":"g18","callId":"c1","name":"read_file","args":{...},"ok":true,"summary":"212 lines","outputPath":null,"tokens":1400}
+  159  {"t":"permission","callId":"c3","rule":"rm -rf","answer":"deny"}
+  160  {"t":"cancel","group":"g20"}
+  161  {"t":"compact","upTo":"g16","summaryPath":"out/compact-1.md","before":58000,"after":11000}
+  162  ```
+  163  
+  164  A **group** = one user turn + the brain turn(s) and tool calls it caused. Groups are the unit for rewind, delete, drop-tool-output, and token accounting.
+  165  
+  166  Sqlite (`index.sqlite`) is a derived index — rebuildable from jsonl. Tables: `sessions`, `groups(session, id, ts, userText, brainText, tokens, toolCount)`, `fts(messages)`. The brain's `sql` tool uses a *separate* db, `.aicommander/data.sqlite`, never the index.
+  167  
+  168  ---
+  169  
+  170  ## 5. Tools
+  171  
+  172  ### Core (always on)
+  173  | tool | notes |
+  174  |---|---|
+  175  | `read_file { path, range? }` | returns content with line numbers; over cap → head + tail + outputPath |
+  176  | `write_file { path, content }` | creates dirs; refuses outside root |
+  177  | `edit_file { path, old, new, all? }` | exact-match replace like Claude Code; returns unified diff |
+  178  | `glob { pattern }` | |
+  179  | `grep { pattern, path?, glob? }` | ripgrep if present, else JS |
+  180  | `shell { cmd, cwd?, timeout? }` | see §6 for timeout → background, permission rules |
+  181  | `job { action: "status"\|"output"\|"kill", jobId }` | background shell jobs |
+  182  | `git { action, ...}` | status, log, diff, add, commit, checkout, branch, stash. `push` and history rewrites go through permission rules |
+  183  | ~~`open_in_panel`~~ | **not a model tool.** The harness opens files itself — see auto-open below |
+  184  | `ask_user { question, options[] }` | renders an info modal; loop pauses; answer returned as tool result |
+  185  | `list_skills {}` / `read_skill { name }` | index is already in system prompt; this pulls full content |
+  186  
+  187  ### Special (opt-in per session via `#`)
+  188  | tool | notes |
+  189  |---|---|
+  190  | `sql { query }` | `.aicommander/data.sqlite`; DDL allowed; returns rows (cap 200) |
+  191  | `comfyui { workflow, inputs }` | POST to configured ComfyUI; polls; saves outputs to `assets/gen/`; returns paths + opens in panel |
+  192  | `cad_render { path, format: "stl"\|"png" }` | openscad CLI |
+  193  | `circuit_export { path }` | kicad-cli → svg |
+  194  | viewer-provided tools | declared in a viewer's `manifest.json` |
+  195  
+  196  Tool results are compact: a `summary` line for the UI, `content` for the model. Output over `toolOutputCap` chars is truncated (head 60% / tail 40%) and the full text written to `out/<callId>.txt`; the model receives the path.
+  197  
+  198  ---
+  199  
+  200  ## 6. The loop
+  201  
+  202  ```
+  203  user turn
+  204    → snapshot (git ref)                      [guard 6]
+  205    → assemble context (§7)
+  206    → stream brain
+  207    → for each tool call:
+  208          parse → repair if malformed         [guard 7]
+  209          permission check (§8)               may pause → modal
+  210          repeat guard                        [guard 1]
+  211          run (shell: timeout → job)          [guard 4]
+  212          cap output                          [guard 3]
+  213          error guard                         [guard 2]
+  214       → append results → stream brain again
+  215    → until: no tool calls | cancel | guard pause | max tool calls | max turns
+  216    → status idle, notify if window blurred
+  217  ```
+  218  
+  219  Guards (spec'd in the options modal, all in `config.json`):
+  220  1. **repeat-call guard** — identical `name+args` N times (default 3) in one group → pause, `ask_user`-style modal: "continue / stop / tell it something".
+  221  2. **consecutive-error guard** — N tool errors in a row (default 4) → same pause.
+  222  3. **tool output cap** — default 8000 chars, full output to `out/`.
+  223  4. **shell timeout → background job** — default 120s. On timeout the process is *not* killed: it becomes a job; the tool returns `{jobId, tail}`; output streams to a `log` tab in the other panel; `job.kill` exists; the brain can poll with `job`.
+  224  5. **steer mid-loop** — `session.send` while running queues the message; it's injected as a user message at the *next tool boundary* (not after the loop). UI shows it as "queued" in the prompt footer. Esc = cancel current tool + stop loop, keep partial text, mark group `cancelled`.
+  225  6. **snapshot before each user turn** — `git add -A && git write-tree`-style ref under `refs/aicommander/<session>-<group>` without touching the index or HEAD. Rewind to a group = restore working tree from that ref (warning modal if dirty) + fork or truncate the log. Untracked files included. Snapshots pruned when sessions are deleted.
+  226  7. **malformed tool calls** — try: JSON repair (trailing commas, single quotes, unquoted keys), XML-ish tool tags, fenced JSON. On failure return a tool error with the parse message so the model retries; counts toward guard 2.
+  227  
+  228  Modes:
+  229  - **ask** — every write/edit/shell/git-write asks (info-style permission, Enter = allow). Danger rules use the danger modal.
+  230  - **auto** — only danger rules ask.
+  231  - **plan** — read-only tools only; write attempts return a tool error "plan mode".
+  232  
+  233  Auto-compact at 75% ctx: summarize groups older than the last 6, keep all file edits as a list, write summary to `out/compact-N.md`, replace in context. Manual compact = F6 → same, with a warning modal first.
+  234  
+  235  ---
+  236  
+  237  ## 7. Context assembly (packages/core/context.ts)
+  238  
+  239  Built fresh every turn, in this order, each layer a separate system/user block:
+  240  
+  241  1. **harness manual** — `.aicommander/system.md`. Explains panels, auto-open, mentions, permissions, modes, `ask_user`, `sql`, viewers. The brain's UX contract. Editable in-app (F4 → editor in other panel).
+  242  2. **project boot** — from `config.json.boot`, default `["AGENTS.md", "CLAUDE.md", "BOOT.md", "SOUL.md", "rules/"]`; loaded in order if present (AGENTS or CLAUDE, first found, unless both listed explicitly).
+  243  3. **skills index** — `skills/*/SKILL.md` frontmatter → `name — description`, one line each.
+  244  4. **tools** — core + enabled special tools (schemas go in the API `tools` field, not the prompt).
+  245  5. **git state** — branch, dirty count, last 3 commits (one line each).
+  246  6. **session** — messages. Attachments are inserted as blocks *above the user turn that mentioned them*: `<file path="..." hash="...">`, `<skill name="...">`, images as vision content. A file attached again with the same hash is replaced by `<file path="..." unchanged/>`. Compacted summary replaces old groups.
+  247  
+  248  Mentions in prose (`@path`, `/skill`, `#tool`) typed without the picker resolve the same way at send time.
+  249  
+  250  ---
+  251  
+  252  ## 8. Permissions
+  253  
+  254  `rules.json` (global merged with project; project wins on same id):
+  255  ```json
+  256  {
+  257    "danger": [
+  258      { "id": "rm-rf", "match": "\\brm\\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)", "tool": "shell", "note": "recursive delete" },
+  259      { "id": "git-force", "match": "push\\s+.*--force|push\\s+-f", "tool": "git" },
+  260      { "id": "git-reset-hard", "match": "reset\\s+--hard", "tool": "git" },
+  261      { "id": "sudo", "match": "^\\s*sudo\\b", "tool": "shell" },
+  262      { "id": "outside-root", "builtin": true },
+  263      { "id": "network", "match": "\\b(curl|wget|nc|ssh|scp)\\b", "tool": "shell", "level": "warning" }
+  264    ],
+  265    "allow": [ { "id": "npm-test", "match": "^npm (test|run lint)$", "tool": "shell" } ]
+  266  }
+  267  ```
+  268  - `level: "danger"` (default) → danger modal, no Enter default, Esc = deny. Answers: once / session / edit / deny. Deny returns the rule note to the brain as a tool error.
+  269  - `level: "warning"` → warning modal, Enter = safe (deny), letter to allow.
+  270  - `allow` short-circuits ask mode.
+  271  - "outside-root" is built-in and cannot be removed.
+  272  
+  273  ---
+  274  
+  275  ## 9. Config schema
+  276  
+  277  ```jsonc
+  278  // .aicommander/config.json (project) / ~/.aicommander/config.json (global) — same shape, project overrides
+  279  {
+  280    "brain": { "endpoint": "http://192.168.1.40:8080/v1", "model": "qwen3-27b", "apiKey": "", "temperature": 0.6, "ctx": 128000, "toolFormat": "auto" },
+  281    "mode": "ask",
+  282    "loop": { "maxToolCallsPerTurn": 50, "maxTurnsPerPrompt": 20, "shellTimeoutSec": 120, "toolOutputCap": 8000, "repeatGuard": 3, "errorGuard": 4 },
+  283    "context": { "autoCompactAt": 0.75, "keepLastGroups": 6 },
+  284    "boot": ["AGENTS.md", "CLAUDE.md", "BOOT.md", "SOUL.md", "rules/"],
+  285    "tools": { "special": ["sql"] },                // enabled by default in new sessions
+  286    "notify": true,
+  287    "comfyui": { "endpoint": "http://192.168.1.40:8188" }
+  288  }
+  289  ```
+  290  Session overrides live in `meta.json.options` and show as "session" in the options modal.
+  291  
+  292  ---
+  293  
+  294  ## 10. UI spec
+  295  
+  296  Reference: `v1-commander.html` for screens, `v2-modals-options.html` for modals. Palette and tokens are in those files' `:root`. Font: JetBrains Mono → IBM Plex Mono → system mono.
+  297  
+  298  ### Shell
+  299  - Top line: app name, repo path, git branch + state, brain + endpoint, ctx used/max.
+  300  - Two panels, gutter draggable and `⌃←/→` (5% steps), persisted. `⌃B` collapses the other panel; again restores.
+  301  - Panel = tabbed **view host**. Views: `chat`, `files`, `editor`, `viewer`, `log`, `sql`. `⌃W` close, `⌃⇥` cycle.
+  302  - A file the brain writes or edits opens itself in the other panel (§5 auto-open), activating an existing tab rather than duplicating it. Never moves focus.
+  303  - Focus = bright border. `Tab` swaps panel focus.
+  304  - Status line: mode-specific hints left, state right (idle / running · n tools · elapsed / files changed / saved).
+  305  - F-key bar: context-relative (see §11). Ctrl+1..0 mirror F1..F10 in web mode.
+  306  
+  307  ### Views
+  308  - **chat** — message list, tool calls rendered as collapsed one-liners (click/`Space` expands), mentions clickable → open in the other panel. Prompt attached at bottom: multiline (`⇧⏎`), grows to 40% of panel, footer shows `queued` when running. `+` button / `F2` / `@ / #` open the picker.
+  309  - **files** — NC list: name, size, date. `↑↓` move, `⏎` open in other panel (dir: enter), `Backspace` up, `Ins` mark, `@` mentions marked set into prompt, `⌃F` filter. Drop zone for upload. Shows `skills/` and `.aicommander/` with subtle labels.
+  310  - **editor** — CodeMirror; md with live preview toggle (`⌃E` edit⇄view); `⌃S` save; unsaved marker in tab; external change → warning modal (v2).
+  311  - **viewer** — chosen by extension via viewer registry: images/video native; `.stl/.obj/.gltf/.scad` → cad; `.kicad_sch/.kicad_pcb` → circuit; `.csv/.sqlite` → table; pdf → iframe. Viewer can emit `mention.add`.
+  312  - **log** — streaming output of a background job or the session's raw events.
+  313  - **sql** — table browser for `data.sqlite`, query box.
+  314  
+  315  ### Overlays
+  316  - **+ picker** — tabs `@ files / skills # tools ! images`, filter, `⏎` attach, `⌃⏎` attach + open in other panel. Shows where each item lands.
+  317  - **session navigator / rewind** — `F7` or `Esc Esc`. Groups with token cost; `⏎` continue from here (fork), `t` truncate, `Del` drop group, `x` drop tool outputs, `c` compact above, `/` search.
+  318  - **options** — `F5` (v2). Values labelled session/project/global; apply / save as project / save as global.
+  319  - **open folder** — `⌃O` (v2). Recents, then filesystem; here / new window / browse. No `.aicommander/` → create + offer gitignore (default no). No git → offer init.
+  320  - **modals** — three tiers + input/pick/progress, exactly as v2 §1. Toasts bottom-right, 4s, stack 3.
+  321  
+  322  ### Viewer plugin API (self-improve)
+  323  ```
+  324  .aicommander/viewers/<name>/
+  325  ├── manifest.json   { "name", "match": ["**/*.gcode"], "tools": [ { name, description, schema, "run": "run.js" } ] }
+  326  ├── index.jsx       default export React component: ({ path, content, url, api }) => JSX; api.mention(text), api.openInOther(path)
+  327  └── run.js          optional: tools the viewer contributes (node, sandboxed to repo root)
+  328  ```
+  329  Loaded at startup and on `viewer.install`. The brain can write one, then must append a line to `system.md` describing it. Plugin JSX is transpiled with esbuild-wasm at load; errors show in a warning modal, never crash the panel.
+  330  
+  331  ---
+  332  
+  333  ## 11. Keymap
+  334  
+  335  <!-- keymap:start -->
+  336  
+  337  *Generated from `apps/web/src/keymap.ts` by `pnpm gen:keymap` — edit the table, not this.*
+  338  
+  339  | key | action | what it does | slash |
+  340  |---|---|---|---|
+  341  | **panels** | | | |
+  342  | `⌘1` | left panel | focus the left panel |  |
+  343  | `⌘2` | right panel | focus the right panel |  |
+  344  | `⇥` | swap panels | move focus to the other panel |  |
+  345  | `⌘B` | collapse | hide the other panel, or bring it back |  |
+  346  | `⌘⇧⏎` | maximize | widen this panel to 80%, or restore it |  |
+  347  | `⌘0` | even split | put the gutter back in the middle |  |
+  348  | `⌘→` | widen | move the gutter right by 5% |  |
+  349  | `⌘←` | narrow | move the gutter left by 5% |  |
+  350  | `⌘⇥` | next tab | cycle tabs in the focused panel |  |
+  351  | `⌘K T` | new tab | open a file manager tab here |  |
+  352  | `⌘K W` | close tab | close the active tab |  |
+  353  | **open** | | | |
+  354  | `⌘/` | help | every key, and what it does | `/help` |
+  355  | `⌘K` | menu | sessions, files, and everything else |  |
+  356  | `⌘⇧A` | attach | the + picker: files, skills, tools, images | `/attach` |
+  357  | `⌘P` | file | fuzzy-find a file; ⏎ here, ⌘⏎ the other panel | `/files` |
+  358  | `⌘⇧P` | touched | files this session has read or changed | `/touched` |
+  359  | `` | file manager | focus the file manager | `/browse` |
+  360  | `⌘O` | open folder | another repo |  |
+  361  | `⌘⇧M` | system | edit what the brain is told about the harness | `/system` |
+  362  | `⌘I` | context | what the last turn actually sent, layer by layer | `/context` |
+  363  | `⌘,` | settings | mode, loop limits, brain | `/model` |
+  364  | **session** | | | |
+  365  | `⌘K N` | new session | start a conversation in a new tab | `/new` |
+  366  | `⌘⇧S` | sessions | switch to another conversation | `/sessions` |
+  367  | `⌘K L` | clear | empty this conversation, keeping the session | `/clear` |
+  368  | `⌘K R` | rewind | the navigator: fork, truncate, drop a turn | `/rewind` |
+  369  | **the loop** | | | |
+  370  | `⌘K C` | compact | summarise the older turns to free context | `/compact` |
+  371  | `Esc` | cancel | stop the running turn |  |
+  372  
+  373  `⌥1`–`⌥9` selects a tab in the focused panel; the number is printed on the tab.
+  374  
+  375  Chords a browser tab owns — `⌘W`, `⌘N`, `⌘T`, `⌘Q` — cannot be taken, so the actions
+  376  that would want them hang off the `⌘K` leader. Tauri adds the direct forms later
+  377  without anything being relearned.
+  378  <!-- keymap:end -->
+  379  
+  380  Files focused:
+  381  ```
+  382  F2 menu   F3 view   F4 edit   F5 copy   F6 move   F7 mkdir   F8 delete   F9 upload
+  383  Ins mark  @ mention marked   ⏎ open in other   Backspace up   ⌃F filter
+  384  ```
+  385  Chat focused:
+  386  ```
+  387  F2 + attach   F3 sessions   F4 system prompt   F5 options   F6 compact   F7 rewind   F8 clear   F9 open ▸
+  388  ⏎ send   ⇧⏎ newline   Esc cancel loop   Esc Esc rewind   ⌃G git panel in other
+  389  ```
+  390  Editor focused: `⌃S save   ⌃E edit⇄view   F3 back to view   Esc → chat`
+  391  Modals: letters shown on buttons; `⏎`/`Esc` per tier contract (§v2).
+  392  
+  393  ---
+  394  
+  395  ## 12. Milestones (build order for Claude Code)
+  396  
+  397  Each milestone ends with a demo you can run and a checklist. Don't start the next until the checklist passes.
+  398  
+  399  ### M0 — "Claude Code in a browser"
+  400  - pnpm monorepo, protocol package with zod, backend `serve` with WS, web app shell (single panel, chat only).
+  401  - Brain client: streaming, tools, `toolFormat: auto` (OpenAI native, plus text-tag fallback for models without native tool calling).
+  402  - Core tools: read/write/edit/glob/grep/shell/git/ask_user.
+  403  - session.jsonl + meta.json; reload restores the chat.
+  404  - Esc cancel.
+  405  - ✅ Open `~/lab/x`, ask "list the files and summarize BUILDME.md", see streaming tool calls, cancel mid-loop, reload page → same session.
+  406  
+  407  ### M1 — Commander shell
+  408  - Two panels, tabs, gutter, focus, F-key bar (context-relative), status line, top line.
+  409  - files view (NC keys, mark, `@`), editor view (CodeMirror, md preview), image viewer.
+  410  - auto-open on write + click on mentions.
+  411  - workspace.json save/restore (tabs, gutter, focus, marks, prompt draft).
+  412  - chokidar → fs.changed → files view refresh.
+  413  - ✅ Brain edits a file → it opens in the other panel; you edit NOTES.md while the loop runs; close and reopen → identical layout.
+  414  
+  415  ### M2 — Loop hardening
+  416  - Guards 1–7 (§6). Background jobs + log view.
+  417  - Permission engine + rules.json + danger/warning modals (v2 contract).
+  418  - Modes ask/auto/plan. Options modal (session/project/global).
+  419  - Snapshots + session navigator (fork/truncate/drop group/drop outputs).
+  420  - Compact (manual + auto), clear, queue/steer.
+  421  - Modal system: all tiers + input/pick/progress + toasts.
+  422  - ✅ `rm -rf` blocked in auto mode; `npm run dev` becomes a job; repeat grep ×3 pauses; rewind restores a deleted file; queued message lands at next tool boundary.
+  423  
+  424  ### M3 — Context
+  425  - system.md (global template shipped in `packages/core/templates/system.md`), boot sequence, skills index, `list_skills/read_skill`.
+  426  - + picker with 4 tabs, mentions in prose, image attachments (vision), file-hash dedupe.
+  427  - Context inspector: `F4` alt view showing the assembled layers and token counts (read-only).
+  428  - ✅ Attach a skill twice in one session → second time is a reference, not content. Context inspector matches what's sent.
+  429  
+  430  ### M4 — Viewers & special tools
+  431  - Viewer registry + plugin loader (esbuild-wasm). Built-ins: video, table (csv/sqlite), pdf, cad (three.js + openscad CLI), circuit (kicad-cli svg + part click → mention).
+  432  - Special tools: sql (data.sqlite + sql view), comfyui, cad_render, circuit_export.
+  433  - Self-improve flow: brain writes a viewer, `viewer.install`, system.md updated.
+  434  - ✅ "Open the case in 3D, thicken the wall, re-render" works end to end; "make a viewer for .gcode" produces a working plugin.
+  435  
+  436  ### M5 — Desktop
+  437  - Tauri 2 shell, backend sidecar, one window per repo, `⌃O` open in new window, recents, desktop notifications, mac + linux builds (dmg, AppImage/deb).
+  438  - Bundle `rg`; detect `openscad`, `kicad-cli`, `git` and show an info modal if missing.
+  439  - ✅ Fresh machine: install, open folder, run a session, quit, reopen → restored.
+  440  
+  441  ---
+  442  
+  443  ## 13. Conventions for working on this repo
+  444  
+  445  - **Commit per checklist item**, message `M2: repeat-call guard` style. Never batch a milestone into one commit.
+  446  - **Tests**: vitest in `packages/core` for context assembly, permission matching, tool-call repair, snapshot/rewind, output capping. A PR that touches the loop adds a test.
+  447  - **Anything reachable through `handleIntent` gets an integration test that drives the real intent, and the test is written first.** Unit tests on the pieces are not enough: a duplicate `case` label once made every rewind clear the session instead, and every unit test still passed. The test must go through `handleIntent` itself.
+  448  - UI is tested by `scripts/ui-check.ts` — CDP against a live backend, run after any UI change. Key probes use real `Input.dispatchKeyEvent`; synthetic events are untrusted and editors ignore them.
+  449  - **Types first**: change `packages/protocol` before core or web. Both sides import from it; no ad-hoc event shapes.
+  450  - **No component libraries, no Tailwind.** Tokens in `apps/web/src/tokens.css` copied from the mockups. If it doesn't look like `v1-commander.html`, it's wrong.
+  451  - **Never write outside the repo root** from any tool. Add a test that proves it.
+  452  - **`.aicommander/` in this repo** is the dogfood folder; commit it.
+  453  - Copy that lands in the UI follows the mockups' voice: sentence case, plain verbs, buttons say what happens ("allow once", not "OK").
+  454  
+  455  ---
+  456  
+  457  ## 14. CLAUDE.md (drop in repo root)
+  458  
+  459  ```md
+  460  # AI Commander
+  461  Read docs/BUILDME.md first. Mockups in docs/mockups/ are the UI spec — match them.
+  462  Current milestone: see docs/PROGRESS.md (update the checklist as you finish items).
+  463  Stack: pnpm workspaces · TS · React+Vite · Node 22 · ws · better-sqlite3 · CodeMirror 6 · three.js · Tauri 2.
+  464  Rules: types in packages/protocol first; commit per checklist item; tests for anything in the loop; no path escapes repo root; no UI libs.
+  465  Run: `pnpm dev` (backend on :7777 + vite), `pnpm test`, `pnpm tauri dev` (M5+).
+  466  ```
+  467  
+  468  ---
+  469  
+  470  ## 15. Open (decide while building, not before)
+  471  
+  472  - Native `.kicad_sch` parser vs svg export — start with svg; parser only if part-click UX needs nets.
+  473  - Parallel read-only tool calls — cheap win once the loop is stable (M2+), not in v1 spec.
+  474  - Sub-agents / sessions spawning sessions — not before M5.

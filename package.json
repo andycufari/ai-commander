@@ -14,7 +14,8 @@
     "dev": "tsx packages/core/src/cli.ts serve .",
     "chat": "tsx scripts/chat.ts",
     "dev:web": "pnpm --filter @aicommander/web dev",
-    "ui-check": "tsx scripts/ui-check.ts"
+    "ui-check": "tsx scripts/ui-check.ts",
+    "gen:keymap": "tsx scripts/gen-keymap.ts"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

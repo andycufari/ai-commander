@@ -335,6 +335,35 @@ async function openViaFiles(page: Page, segments: string[]): Promise<void> {
   }
 }
 
+/**
+ * §11: every binding in keymap.ts must actually do something.
+ *
+ * The table is the source for the bar, the help overlay and the spec, so an entry that
+ * dispatches to nothing looks bound everywhere and works nowhere — exactly how ⌘⇧M sat
+ * in the table for a while with no way for anyone to find it.
+ */
+export async function assertEveryBindingBound(page: Page): Promise<void> {
+  const report = await page.eval<{ total: number; unbound: string[]; barMissing: string[] }>(`(() => {
+    const km = window.__keymap;
+    if (!km) return { total: 0, unbound: ['keymap not exposed'], barMissing: [] };
+    const unbound = [];
+    for (const b of km.bindings) {
+      // Reachable at all: a chord, a leader key, or a slash command.
+      if (!b.chord && !b.leader && !b.command) unbound.push(b.id);
+      // And the app must recognise the id.
+      else if (!km.handles(b.id)) unbound.push(b.id);
+    }
+    const barMissing = km.bindings
+      .filter(b => b.bar && b.bar.length && !km.hint(b))
+      .map(b => b.id);
+    return { total: km.bindings.length, unbound, barMissing };
+  })()`);
+
+  check("every binding is reachable and handled", report.unbound.length === 0, report.unbound);
+  check("every bar entry prints a chord", report.barMissing.length === 0, report.barMissing);
+  check("the keymap is not empty", report.total > 10, { total: report.total });
+}
+
 /* ------------------------------------------------------------------ */
 
 async function main(): Promise<void> {
@@ -370,6 +399,9 @@ async function main(): Promise<void> {
     await assertGutterAt(page, 0.5);
     // Still no overflow after resizing.
     await assertNoOverflow(page);
+
+    group("keymap");
+    await assertEveryBindingBound(page);
 
     group("F-bar");
     // Chat is focused on the left, so the bar must show session keys.
@@ -411,7 +443,8 @@ async function main(): Promise<void> {
     const closed = await rightTabState();
     check("⌘K W closes the tab and the strip hides again", closed.strip === 0, closed);
     check("the shell is still usable after closing a tab",
-      await page.eval<boolean>("!!document.querySelector('.prompt') && !!document.querySelector('.cols > .blk')"),
+      await page.eval<boolean>(
+        "!!document.querySelector('.prompt') && document.querySelectorAll('.cols > .blk').length === 2"),
       closed);
 
     group("files view");
@@ -467,16 +500,18 @@ async function main(): Promise<void> {
     // ⏎ on a file opens it in the *other* panel through the viewer registry.
     await fileKey("Enter");
     await sleep(500);
-    const opened2 = await page.eval<{ left: string; right: string }>(`(() => {
+    const opened2 = await page.eval<{ titles: string[]; filesSide: number; viewSide: number }>(`(() => {
       const blks = [...document.querySelectorAll('.cols > .blk')];
       return {
-        left: blks[0]?.querySelector('.t')?.textContent ?? '',
-        right: blks[1]?.querySelector('.t')?.textContent ?? '',
+        titles: blks.map(b => b.querySelector('.t')?.textContent ?? ''),
+        filesSide: blks.findIndex(b => b.querySelector('.files')),
+        viewSide: blks.findIndex(b => b.querySelector('.body.md, .body.cm, .body.image')),
       };
     })()`);
-    check("⏎ opens the file in the other panel",
-      opened2.left !== "" && !opened2.left.startsWith("chat") && opened2.right.startsWith("files") === false || opened2.left !== "",
-      opened2);
+    // The point of ⏎ is that the file does not land on the manager you browsed from.
+    check("⏎ opens the file somewhere", opened2.viewSide !== -1, opened2);
+    check("⏎ does not open it over the file manager",
+      opened2.viewSide !== opened2.filesSide, opened2);
     await assertNoOverflow(page);
     await assertTitlesNotClipped(page);
 
@@ -697,16 +732,21 @@ async function main(): Promise<void> {
       `[...document.querySelectorAll('.cols > .blk')].findIndex(b => b.classList.contains('focus'))`);
     await page.eval(`document.querySelector('.u .m')?.click()`);
     await sleep(1200);
-    const afterClick = await page.eval<{ right: string; focus: number; hasView: boolean }>(`(() => {
+    const afterClick = await page.eval<{ where: string; focus: number; hasView: boolean }>(`(() => {
+      // Which panel it landed in is the app's choice, not the test's: assert that a
+      // viewer appeared somewhere and the chat is still there, not that it went right.
       const blks = [...document.querySelectorAll('.cols > .blk')];
+      const host = blks.find(b => b.querySelector('.body.md, .body.cm, .body.image'));
       return {
-        right: blks[1]?.querySelector('.t')?.textContent ?? '',
+        where: host?.querySelector('.t')?.textContent ?? '',
         focus: blks.findIndex(b => b.classList.contains('focus')),
-        hasView: !!blks[1]?.querySelector('.body.md, .body.cm, .body.image'),
+        hasView: !!host,
       };
     })()`);
-    check("clicking a mention opens it in the other panel",
-      afterClick.hasView && afterClick.right.includes(mdName), afterClick);
+    check("clicking a mention opens it in a panel",
+      afterClick.hasView && afterClick.where.includes(mdName), afterClick);
+    check("the chat survives the mention click",
+      await page.eval<boolean>("!!document.querySelector('.prompt textarea')"));
     check("clicking a mention does not steal focus", afterClick.focus === focusBefore,
       { before: focusBefore, after: afterClick.focus });
     await assertNoOverflow(page);

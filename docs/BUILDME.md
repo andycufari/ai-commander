@@ -332,22 +332,51 @@ Loaded at startup and on `viewer.install`. The brain can write one, then must ap
 
 ## 11. Keymap
 
-Global:
-```
-Tab        swap panel focus       ⌃1/⌃2  focus left / right panel
-⌃←/→       resize gutter          ⌃B     collapse other panel
-⌃⇥         next tab               ⌃W     close tab
-⌃N         new session (in the focused panel)
-⌃T         pick ▸ new session · existing session · files · file…
-⌃P         fuzzy file open        ⏎ here · ⌃⏎ other panel
-⌃⇧P        files this session has touched, same keys
-⌃O         open folder            ⌃,     options
-F1         help (keymap overlay)  F10    quit (warning if running)
-```
+<!-- keymap:start -->
 
-`⌃T` opens the **pick modal** — the info-tier filterable list from v2 §"the other three
-shapes". It is the same component as the `+` picker (M3) and the session/model/viewer
-choosers (M2), so it is built once: filter box, arrow keys, `⏎` choose, `Esc` close.
+*Generated from `apps/web/src/keymap.ts` by `pnpm gen:keymap` — edit the table, not this.*
+
+| key | action | what it does | slash |
+|---|---|---|---|
+| **panels** | | | |
+| `⌘1` | left panel | focus the left panel |  |
+| `⌘2` | right panel | focus the right panel |  |
+| `⇥` | swap panels | move focus to the other panel |  |
+| `⌘B` | collapse | hide the other panel, or bring it back |  |
+| `⌘⇧⏎` | maximize | widen this panel to 80%, or restore it |  |
+| `⌘0` | even split | put the gutter back in the middle |  |
+| `⌘→` | widen | move the gutter right by 5% |  |
+| `⌘←` | narrow | move the gutter left by 5% |  |
+| `⌘⇥` | next tab | cycle tabs in the focused panel |  |
+| `⌘K T` | new tab | open a file manager tab here |  |
+| `⌘K W` | close tab | close the active tab |  |
+| **open** | | | |
+| `⌘/` | help | every key, and what it does | `/help` |
+| `⌘K` | menu | sessions, files, and everything else |  |
+| `⌘⇧A` | attach | the + picker: files, skills, tools, images | `/attach` |
+| `⌘P` | file | fuzzy-find a file; ⏎ here, ⌘⏎ the other panel | `/files` |
+| `⌘⇧P` | touched | files this session has read or changed | `/touched` |
+| `` | file manager | focus the file manager | `/browse` |
+| `⌘O` | open folder | another repo |  |
+| `⌘⇧M` | system | edit what the brain is told about the harness | `/system` |
+| `⌘I` | context | what the last turn actually sent, layer by layer | `/context` |
+| `⌘,` | settings | mode, loop limits, brain | `/model` |
+| **session** | | | |
+| `⌘K N` | new session | start a conversation in a new tab | `/new` |
+| `⌘⇧S` | sessions | switch to another conversation | `/sessions` |
+| `⌘K L` | clear | empty this conversation, keeping the session | `/clear` |
+| `⌘K R` | rewind | the navigator: fork, truncate, drop a turn | `/rewind` |
+| **the loop** | | | |
+| `⌘K C` | compact | summarise the older turns to free context | `/compact` |
+| `Esc` | cancel | stop the running turn |  |
+
+`⌥1`–`⌥9` selects a tab in the focused panel; the number is printed on the tab.
+
+Chords a browser tab owns — `⌘W`, `⌘N`, `⌘T`, `⌘Q` — cannot be taken, so the actions
+that would want them hang off the `⌘K` leader. Tauri adds the direct forms later
+without anything being relearned.
+<!-- keymap:end -->
+
 Files focused:
 ```
 F2 menu   F3 view   F4 edit   F5 copy   F6 move   F7 mkdir   F8 delete   F9 upload
@@ -417,6 +446,7 @@ Each milestone ends with a demo you can run and a checklist. Don't start the nex
 - **Tests**: vitest in `packages/core` for context assembly, permission matching, tool-call repair, snapshot/rewind, output capping. A PR that touches the loop adds a test.
 - **Anything reachable through `handleIntent` gets an integration test that drives the real intent, and the test is written first.** Unit tests on the pieces are not enough: a duplicate `case` label once made every rewind clear the session instead, and every unit test still passed. The test must go through `handleIntent` itself.
 - UI is tested by `scripts/ui-check.ts` — CDP against a live backend, run after any UI change. Key probes use real `Input.dispatchKeyEvent`; synthetic events are untrusted and editors ignore them.
+- **Keys live in `apps/web/src/keymap.ts`** — one table feeds the chords, the slash commands, the key bar, the ⌘/ help overlay and §11 of this file. Run `pnpm gen:keymap` after changing it; `--check` fails when the spec has drifted. ui-check asserts every entry is actually handled.
 - **Types first**: change `packages/protocol` before core or web. Both sides import from it; no ad-hoc event shapes.
 - **No component libraries, no Tailwind.** Tokens in `apps/web/src/tokens.css` copied from the mockups. If it doesn't look like `v1-commander.html`, it's wrong.
 - **Never write outside the repo root** from any tool. Add a test that proves it.
