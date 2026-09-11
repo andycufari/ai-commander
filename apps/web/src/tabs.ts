@@ -15,6 +15,8 @@ export interface PanelTabs {
   select: (id: string) => void;
   cycle: (dir?: 1 | -1) => void;
   setDirty: (id: string, dirty: boolean) => void;
+  /** Change a tab in place — the files view navigating to another directory. */
+  update: (id: string, patch: Partial<Omit<Tab, "id">>) => void;
   replaceAll: (tabs: Tab[], activeId: string | null) => void;
 }
 
@@ -69,6 +71,11 @@ export function usePanelTabs(initial: Tab[] = [], initialActive: string | null =
     setTabs(tabsRef.current);
   }, []);
 
+  const update = useCallback((id: string, patch: Partial<Omit<Tab, "id">>) => {
+    tabsRef.current = tabsRef.current.map((t) => (t.id === id ? { ...t, ...patch } : t));
+    setTabs(tabsRef.current);
+  }, []);
+
   const replaceAll = useCallback((next: Tab[], nextActive: string | null) => {
     tabsRef.current = next;
     setTabs(next);
@@ -79,7 +86,7 @@ export function usePanelTabs(initial: Tab[] = [], initialActive: string | null =
     tabs,
     activeId,
     active: tabs.find((t) => t.id === activeId),
-    open, close, select: setActiveId, cycle, setDirty, replaceAll,
+    open, close, select: setActiveId, cycle, setDirty, update, replaceAll,
   };
 }
 

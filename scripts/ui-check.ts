@@ -296,7 +296,81 @@ async function main(): Promise<void> {
       closed.title.startsWith("chat") && (await page.eval<boolean>("!!document.querySelector('.prompt')")),
       closed);
 
+    group("files view");
+    // The tab checks above left a files tab open; start this group from a clean shell
+    // so each group asserts against a known layout rather than the previous one's.
+    await page.reload();
+    await sleep(2500);
+    // Open a files tab in the right panel and drive the NC keys.
+    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}))`);
+    await sleep(200);
+    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',ctrlKey:true,bubbles:true}))`);
+    await sleep(900);
+
+    const fileKey = async (k: string, ctrl = false): Promise<void> => {
+      await page.eval(`document.querySelector('.files')?.dispatchEvent(new KeyboardEvent('keydown',{key:${JSON.stringify(k)},bubbles:true,ctrlKey:${ctrl}}))`);
+      await sleep(220);
+    };
+
+    const names = await page.eval<string[]>(
+      `[...document.querySelectorAll('.files .row:not(.up) .nm')].map(n => n.textContent.trim())`);
+    // Strip the ▸ dir marker and trailing slash to get the bare entry name.
+    const bare = (n: string): string => n.replace(/^▸\s*/, "").replace(/\/$/, "").trim();
+    const listing = {
+      names,
+      dirs: names.filter((n) => n.startsWith("▸")).length,
+      hasAicommander: names.some((n) => bare(n) === ".aicommander"),
+      hasDotfile: names.some((n) => bare(n).startsWith(".") && bare(n) !== ".aicommander"),
+    };
+    check("files view lists the repo", listing.names.length > 0, listing.names);
+    check("directories sort before files",
+      listing.names.slice(0, listing.dirs).every((n) => n.startsWith("▸")), listing.names);
+    check(".aicommander stays visible with hidden files off", listing.hasAicommander, listing.names);
+    check("other dotfiles are hidden by default", !listing.hasDotfile, listing.names);
+
+    await fileKey("h", true);
+    const withHidden = await page.eval<string[]>(
+      `[...document.querySelectorAll('.files .row:not(.up) .nm')].map(n => n.textContent.trim())`);
+    check("⌃H reveals dotfiles", withHidden.length > listing.names.length, { before: listing.names.length, after: withHidden.length });
+    await fileKey("h", true);
+
+    // Mark two files with Ins, then @ — which must produce chips, not prompt text.
+    const firstFile = await page.eval<number>(
+      `[...document.querySelectorAll('.files .row:not(.up) .nm')].findIndex(n => !n.textContent.trim().startsWith('▸'))`);
+    for (let i = 0; i < firstFile; i += 1) await fileKey("ArrowDown");
+    await fileKey("Insert");
+    await fileKey("Insert");
+    const marked = await page.eval<string>("document.querySelector('.files-tb')?.textContent ?? ''");
+    check("Ins marks files and the footer counts them", /2 marked/.test(marked), marked);
+
+    await fileKey("@");
+    const mentioned = await page.eval<{ chips: string[]; textarea: string }>(`(() => ({
+      chips: [...document.querySelectorAll('.chip')].map(c => c.textContent.replace('×','')),
+      textarea: document.querySelector('.prompt textarea')?.value ?? '',
+    }))()`);
+    check("@ inserts chips, not raw prompt text",
+      mentioned.chips.length === 2 && mentioned.textarea === "", mentioned);
+    check("chips read as @path", mentioned.chips.every((c) => c.startsWith("@")), mentioned.chips);
+
+    // ⏎ on a file opens it in the *other* panel through the viewer registry.
+    await fileKey("Enter");
+    await sleep(500);
+    const opened2 = await page.eval<{ left: string; right: string }>(`(() => {
+      const blks = [...document.querySelectorAll('.cols > .blk')];
+      return {
+        left: blks[0]?.querySelector('.t')?.textContent ?? '',
+        right: blks[1]?.querySelector('.t')?.textContent ?? '',
+      };
+    })()`);
+    check("⏎ opens the file in the other panel",
+      opened2.left !== "" && !opened2.left.startsWith("chat") && opened2.right.startsWith("files") === false || opened2.left !== "",
+      opened2);
+    await assertNoOverflow(page);
+    await assertTitlesNotClipped(page);
+
     group("focus");
+    await page.reload();
+    await sleep(2500);
     const before = await page.eval<string>("document.querySelector('.cols > .blk.focus')?.className ?? ''");
     await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}))`);
     await sleep(200);
@@ -306,6 +380,8 @@ async function main(): Promise<void> {
     await sleep(200);
 
     group("layout");
+    await page.reload();
+    await sleep(2500);
     await assertNoOverflow(page);
     await assertTitlesNotClipped(page);
     await assertPromptAttached(page);

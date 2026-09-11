@@ -3,6 +3,10 @@ import type { Event, PanelSide, Tab } from "@aicommander/protocol";
 import { connect, echoUser, initialState, reduce, type ChatRow, type Connection, type UiState } from "./ws.js";
 import { GUTTER_STEP, useGutterDrag, usePanelLayout } from "./panels.js";
 import { keysFor, usePanelTabs, type FKeySet, type PanelTabs } from "./tabs.js";
+import { FilesView } from "./FilesView.js";
+import { defaultRegistry } from "./viewers.js";
+import { addChips, removeChip, type Chip } from "./chips.js";
+import type { Attachment } from "@aicommander/protocol";
 
 /** The shell: top line, two tabbed panels with a draggable gutter, status line,
  *  and a context-relative F-bar. The files view lands in the next M1 step. */
@@ -42,10 +46,13 @@ export function App(): JSX.Element {
     }
   }, [state.connected, state.sessionsLoaded, state.sessions]);
 
-  const send = useCallback((text: string) => {
+  const send = useCallback((text: string, attachments: Attachment[] = []) => {
     if (!state.sessionId) return;
-    dispatch({ type: "__echo", text });
-    conn.current?.send({ type: "session.send", sessionId: state.sessionId, text, attachments: [] });
+    const shown = attachments.length
+      ? `${attachments.map((a) => (a.kind === "file" ? `@${a.path}` : "")).filter(Boolean).join(" ")}\n${text}`.trim()
+      : text;
+    dispatch({ type: "__echo", text: shown });
+    conn.current?.send({ type: "session.send", sessionId: state.sessionId, text, attachments });
   }, [state.sessionId]);
 
   const cancel = useCallback(() => {
@@ -61,6 +68,24 @@ export function App(): JSX.Element {
   const left = usePanelTabs([{ id: "chat", view: "chat", title: "chat", dirty: false }], "chat");
   const right = usePanelTabs([]);
   const focused = layout.focus === "left" ? left : right;
+
+  // Prompt attachments, as chips (§7). The M3 + picker adds to the same list.
+  const [chips, setChips] = useState<Chip[]>([]);
+  const mention = useCallback((attachments: Attachment[]) => {
+    setChips((prev) => addChips(prev, attachments));
+  }, []);
+
+  /** ⏎ on a file: the registry decides which view opens it, in the *other* panel (§5). */
+  const openFile = useCallback((fromSide: PanelSide, path: string) => {
+    const entry = defaultRegistry.resolve(path);
+    const target = fromSide === "left" ? right : left;
+    target.open({
+      view: entry.view,
+      title: path.split("/").pop() ?? path,
+      path,
+      viewer: entry.name,
+    });
+  }, [left, right]);
 
   // Global keys (§11): Tab swaps focus, ⌃←/→ resizes, ⌃B collapses, Esc cancels.
   useEffect(() => {
@@ -129,11 +154,30 @@ export function App(): JSX.Element {
         return (
           <>
             <Chat rows={state.rows} running={running} />
-            <Prompt onSend={send} running={running} queued={state.queued} focused={layout.focus === side} />
+            <Prompt
+              onSend={send} running={running} queued={state.queued}
+              focused={layout.focus === side}
+              chips={chips}
+              onRemoveChip={(key) => setChips((prev) => removeChip(prev, key))}
+            />
           </>
         );
+      case "files":
+        return (
+          <FilesView
+            conn={conn.current}
+            path={tab.path ?? "."}
+            focused={layout.focus === side}
+            onNavigate={(next) => {
+              const host = side === "left" ? left : right;
+              host.update(tab.id, { path: next, title: next === "." ? "files" : next.split("/").pop()! });
+            }}
+            onOpen={(p) => openFile(side, p)}
+            onMention={mention}
+          />
+        );
       default:
-        return <div className="body empty">files view · M1 step 3</div>;
+        return <div className="body empty">no view</div>;
     }
   };
 
@@ -309,8 +353,15 @@ function Row({ row }: { row: ChatRow }): JSX.Element {
 }
 
 function Prompt({
-  onSend, running, queued, focused,
-}: { onSend: (text: string) => void; running: boolean; queued?: string; focused: boolean }): JSX.Element {
+  onSend, running, queued, focused, chips, onRemoveChip,
+}: {
+  onSend: (text: string, attachments: Attachment[]) => void;
+  running: boolean;
+  queued?: string;
+  focused: boolean;
+  chips: Chip[];
+  onRemoveChip: (key: string) => void;
+}): JSX.Element {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -333,9 +384,15 @@ function Prompt({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       const trimmed = text.trim();
+      // Attachments alone are not a turn; the model needs something to do with them.
       if (!trimmed) return;
-      onSend(trimmed);
+      onSend(trimmed, chips.map((c) => c.attachment));
       setText("");
+    }
+    // Backspace at the very start removes the last chip, the way a mail client does.
+    if (e.key === "Backspace" && text === "" && chips.length > 0) {
+      e.preventDefault();
+      onRemoveChip(chips[chips.length - 1]!.key);
     }
   };
 
@@ -348,6 +405,16 @@ function Prompt({
   return (
     <div className="prompt">
       <span className="t">prompt</span>
+      {chips.length > 0 && (
+        <div className="chips">
+          {chips.map((c) => (
+            <span key={c.key} className={`chip ${c.attachment.kind}`}>
+              {c.label}
+              <i className="x" title="remove" onMouseDown={(e) => { e.preventDefault(); onRemoveChip(c.key); }}>×</i>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="row">
         <span className="chev">›</span>
         <textarea

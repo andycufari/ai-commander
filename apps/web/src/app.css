@@ -121,6 +121,38 @@ html, body, #root {
 
 .body { overflow-y: auto; flex: 1; min-height: 0; }
 .body.empty { display: grid; place-items: center; color: var(--dim); }
+
+/* files view — NC columns: name, size, date (§10) */
+.body.files { outline: none; }
+.files .row {
+  display: grid;
+  /* minmax(0, …) on every track: without it a grid item's min-content width wins and
+     a long label (".aicommander → sessions · out · viewers") pushes the row off-panel. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 5em) minmax(0, 7em);
+  gap: 8px;
+  padding: 0 2px;
+  white-space: pre;
+  cursor: default;
+}
+.files .row .nm { overflow: hidden; text-overflow: ellipsis; }
+.files .row .sz { text-align: right; color: var(--dim); }
+/* The date column also carries the .aicommander/skills labels, which are wider than a
+   date — it and anything inside it must clip rather than push the row past the panel. */
+.files .row .dt { color: var(--dim); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.files .row .dt > * { display: block; overflow: hidden; text-overflow: ellipsis; }
+.files .row.sel { background: var(--sel); color: var(--hi); }
+.files .row.sel .sz, .files .row.sel .dt { color: var(--hi); }
+.files .row.up { color: var(--dim); }
+.files .d { color: var(--hi); }
+.files .mark { color: var(--amber); }
+.files .row.marked .nm { color: var(--amber); }
+.files .err-row { color: var(--red); padding: 2px; }
+
+/* the block's bottom-right caption, cut into the border like the title */
+.blk > .tb {
+  position: absolute; bottom: -9px; right: 8px;
+  background: var(--bg); padding: 0 5px; color: var(--dim); font-size: 11px;
+}
 .body.wrap { white-space: normal; }
 
 /* chat rows */
@@ -160,6 +192,22 @@ html, body, #root {
   position: absolute; bottom: -9px; right: 8px;
   background: var(--bg); padding: 0 5px; color: var(--dim); font-size: 11px;
 }
+/* attachment chips — what @ and the M3 + picker produce (§7) */
+.prompt .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.chip {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 4px;
+  color: var(--hi);
+  background: var(--sel);
+  white-space: nowrap;
+  font-size: 11px;
+}
+.chip.skill { color: var(--amber); }
+.chip.image { color: var(--ink); }
+.chip .x { font-style: normal; margin-left: 5px; color: var(--dim); cursor: pointer; }
+.chip .x:hover { color: var(--red); }
+
 .prompt .row { display: flex; align-items: flex-start; gap: 6px; }
 .prompt .chev { color: var(--dim); flex: none; user-select: none; }
 .prompt textarea {

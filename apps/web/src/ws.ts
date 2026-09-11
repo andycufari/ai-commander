@@ -153,6 +153,12 @@ export type IntentInput = Intent extends infer T
 
 export interface Connection {
   send: (intent: IntentInput) => void;
+  /**
+   * Send an intent and wait for the reply event that quotes its id (§3 reply events).
+   * Directory listings and file reads are per-tab, not global state, so they are
+   * awaited here rather than pushed through the app-wide reducer.
+   */
+  request: <T extends Event>(intent: IntentInput, replyType: T["type"], timeoutMs?: number) => Promise<T>;
   close: () => void;
 }
 
@@ -162,17 +168,34 @@ export function connect(onEvent: (e: Event) => void, onOpen: () => void, onClose
   let closed = false;
   let retry = 500;
 
+  /** Pending request() calls, keyed by the intent id they are waiting on. */
+  const waiting = new Map<string, { type: string; resolve: (e: Event) => void; reject: (err: Error) => void }>();
+
   const wire = (ws: WebSocket): void => {
     ws.onopen = () => {
       retry = 500;
       onOpen();
     };
     ws.onmessage = (m) => {
+      let event: Event;
       try {
-        onEvent(JSON.parse(m.data as string) as Event);
+        event = JSON.parse(m.data as string) as Event;
       } catch {
         // a frame we cannot read is not worth tearing the session down for
+        return;
       }
+      // A reply resolves its waiter; an error aimed at the same intent rejects it.
+      const intentId = (event as { intentId?: string }).intentId;
+      if (intentId) {
+        const pending = waiting.get(intentId);
+        if (pending) {
+          waiting.delete(intentId);
+          if (event.type === "error") pending.reject(new Error(event.message));
+          else if (event.type === pending.type) pending.resolve(event);
+          else pending.reject(new Error(`expected ${pending.type}, got ${event.type}`));
+        }
+      }
+      onEvent(event);
     };
     ws.onclose = () => {
       onClose();
@@ -187,12 +210,32 @@ export function connect(onEvent: (e: Event) => void, onOpen: () => void, onClose
   };
   wire(socket);
 
+  const send = (intent: IntentInput): string | undefined => {
+    if (socket.readyState !== WebSocket.OPEN) return undefined;
+    const id = (intent as { id?: string }).id ?? randomUUID();
+    socket.send(JSON.stringify({ ...intent, id }));
+    return id;
+  };
+
   return {
-    send: (intent: IntentInput) => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ id: randomUUID(), ...intent }));
-      }
-    },
+    send: (intent) => void send(intent),
+    request: <T extends Event>(intent: IntentInput, replyType: T["type"], timeoutMs = 8000) =>
+      new Promise<T>((resolve, reject) => {
+        const id = send(intent);
+        if (!id) {
+          reject(new Error("not connected"));
+          return;
+        }
+        const timer = setTimeout(() => {
+          waiting.delete(id);
+          reject(new Error(`${intent.type} timed out`));
+        }, timeoutMs);
+        waiting.set(id, {
+          type: replyType,
+          resolve: (e) => { clearTimeout(timer); resolve(e as T); },
+          reject: (err) => { clearTimeout(timer); reject(err); },
+        });
+      }),
     close: () => {
       closed = true;
       socket.close();
