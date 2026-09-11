@@ -66,6 +66,40 @@ export function parentOf(dir: string): string | null {
   return dir.slice(0, dir.lastIndexOf("/")) || ".";
 }
 
+/**
+ * A row in the list: the parent link, a directory (possibly expanded), or a file.
+ *
+ * Expansion is in-place — `→` on a directory reveals its children indented beneath it,
+ * the way a tree works, so you can look inside without losing your place. `⏎` still
+ * navigates into it, which is the Norton Commander behaviour the spec asks for.
+ */
+export interface Row {
+  kind: "up" | "entry";
+  entry?: FsEntry;
+  /** Nesting level, for the indent of an expanded directory's children. */
+  depth: number;
+  expanded?: boolean;
+}
+
+/** Build the visible rows from a listing plus whatever directories are expanded. */
+export function buildRows(
+  entries: readonly FsEntry[],
+  showHidden: boolean,
+  expanded: ReadonlyMap<string, FsEntry[]>,
+  atRoot: boolean,
+): Row[] {
+  const rows: Row[] = atRoot ? [] : [{ kind: "up", depth: 0 }];
+  const walk = (list: readonly FsEntry[], depth: number): void => {
+    for (const entry of visibleEntries(list, showHidden)) {
+      const children = entry.dir ? expanded.get(entry.path) : undefined;
+      rows.push({ kind: "entry", entry, depth, expanded: children !== undefined });
+      if (children) walk(children, depth + 1);
+    }
+  };
+  walk(entries, 0);
+  return rows;
+}
+
 /** Footer line from the mockup: `1 of 3 dirs · 14 files`. */
 export function summarize(entries: readonly FsEntry[], markedCount: number): string {
   const dirs = entries.filter((e) => e.dir).length;

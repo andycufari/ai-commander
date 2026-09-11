@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Attachment, FsEntry } from "@aicommander/protocol";
 import type { Connection } from "./ws.js";
 import {
-  ALWAYS_VISIBLE, formatDate, formatSize, joinPath, parentOf, summarize, visibleEntries,
+  ALWAYS_VISIBLE, buildRows, formatDate, formatSize, parentOf, summarize, visibleEntries,
+  type Row,
 } from "./files.js";
 import { fileAttachment } from "./chips.js";
 
@@ -38,8 +39,14 @@ export function FilesView({
   const [marked, setMarked] = useState<Set<string>>(new Set(markedProp ?? []));
   const [showHidden, setShowHidden] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
-  /** False until the first listing, so a refresh can be told from a first load. */
-  const listedOnce = useRef(false);
+  /**
+   * The path of the last completed listing. Comparing paths tells a navigation from a
+   * watcher refresh; a boolean could not, because the effect that reset it ran after
+   * the load effect had already read it.
+   */
+  const listedPath = useRef<string>();
+  /** Directories expanded in place with →, and their children. */
+  const [expanded, setExpanded] = useState<Map<string, FsEntry[]>>(new Map());
 
   /**
    * List the directory, and re-list it when the watcher reports a change.
@@ -50,15 +57,18 @@ export function FilesView({
   useEffect(() => {
     let cancelled = false;
     if (!conn) return;
-    const isRefresh = listedOnce.current;
+    const isRefresh = listedPath.current === path;
     conn
       .request({ type: "fs.list", path }, "fs.listed")
       .then((e) => {
         if (cancelled) return;
-        listedOnce.current = true;
+        listedPath.current = path;
         setEntries((e as { entries: FsEntry[] }).entries);
         setError(undefined);
-        if (!isRefresh) setCursor(0);
+        // Land on the first real entry, not on "..": arriving in a directory with the
+        // cursor on its exit means ⏎ bounces straight back out. Row 0 is ".." in any
+        // directory but the root, so the first entry is row 1 there.
+        if (!isRefresh) setCursor(parentOf(path) === null ? 0 : 1);
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
@@ -66,9 +76,10 @@ export function FilesView({
     return () => { cancelled = true; };
   }, [conn, path, revision]);
 
-  const rows = visibleEntries(entries, showHidden);
   const atRoot = parentOf(path) === null;
+  const rows = buildRows(entries, showHidden, expanded, atRoot);
   const current = rows[Math.min(cursor, rows.length - 1)];
+  const currentEntry = current?.entry;
 
   useEffect(() => {
     onMarkedChange?.([...marked]);
@@ -76,19 +87,54 @@ export function FilesView({
 
   // Marks belong to the directory they were made in — but survive a refresh of it.
   useEffect(() => {
-    listedOnce.current = false;
     setMarked(new Set());
+    setExpanded(new Map());
   }, [path]);
 
   const move = useCallback((delta: number) => {
     setCursor((c) => Math.max(0, Math.min(rows.length - 1, c + delta)));
   }, [rows.length]);
 
-  const enter = useCallback((entry: FsEntry | undefined) => {
-    if (!entry) return;
+  /** ⏎: a directory is entered, a file opens in the other panel (§10). */
+  const enter = useCallback((row: Row | undefined) => {
+    if (!row) return;
+    if (row.kind === "up") {
+      const parent = parentOf(path);
+      if (parent !== null) onNavigate(parent);
+      return;
+    }
+    const entry = row.entry!;
     if (entry.dir) onNavigate(entry.path);
     else onOpen(entry.path);
-  }, [onNavigate, onOpen]);
+  }, [path, onNavigate, onOpen]);
+
+  /** → expands a directory in place; ← collapses it, or walks out to the parent. */
+  const expand = useCallback(async (row: Row | undefined) => {
+    const entry = row?.entry;
+    if (!entry?.dir || !conn) return;
+    if (expanded.has(entry.path)) return;
+    const reply = await conn.request({ type: "fs.list", path: entry.path }, "fs.listed")
+      .catch(() => undefined);
+    if (!reply) return;
+    setExpanded((prev) => {
+      const next = new Map(prev);
+      next.set(entry.path, (reply as { entries: FsEntry[] }).entries);
+      return next;
+    });
+  }, [conn, expanded]);
+
+  const collapse = useCallback((row: Row | undefined) => {
+    const entry = row?.entry;
+    if (entry?.dir && expanded.has(entry.path)) {
+      setExpanded((prev) => {
+        const next = new Map(prev);
+        next.delete(entry.path);
+        return next;
+      });
+      return true;
+    }
+    return false;
+  }, [expanded]);
 
   const up = useCallback(() => {
     const parent = parentOf(path);
@@ -108,11 +154,13 @@ export function FilesView({
 
   const mention = useCallback(() => {
     // Nothing marked → mention the row under the cursor, which is what you meant.
-    const paths = marked.size > 0 ? [...marked] : current && !current.dir ? [current.path] : [];
+    const paths = marked.size > 0
+      ? [...marked]
+      : currentEntry && !currentEntry.dir ? [currentEntry.path] : [];
     if (paths.length === 0) return;
     onMention(paths.map(fileAttachment));
     setMarked(new Set());
-  }, [marked, current, onMention]);
+  }, [marked, currentEntry, onMention]);
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
     switch (e.key) {
@@ -124,7 +172,13 @@ export function FilesView({
       case "End": e.preventDefault(); setCursor(rows.length - 1); return;
       case "Enter": e.preventDefault(); enter(current); return;
       case "Backspace": e.preventDefault(); up(); return;
-      case "Insert": e.preventDefault(); toggleMark(current); return;
+      case "ArrowRight": e.preventDefault(); void expand(current); return;
+      case "ArrowLeft":
+        e.preventDefault();
+        // Collapse what is open, else step out to the parent — the tree convention.
+        if (!collapse(current)) up();
+        return;
+      case "Insert": e.preventDefault(); toggleMark(currentEntry); return;
       case "@": e.preventDefault(); mention(); return;
       default:
         if (e.ctrlKey && (e.key === "h" || e.key === "H")) {
@@ -154,12 +208,24 @@ export function FilesView({
         aria-label="files"
       >
         {error && <div className="err-row">{error}</div>}
-        {!atRoot && (
-          <div className="row up" onClick={up}>
-            <span className="d">▸ ..</span>
-          </div>
-        )}
-        {rows.map((entry, i) => {
+        {rows.map((row, i) => {
+          if (row.kind === "up") {
+            return (
+              <div
+                key=".."
+                className={`row up${i === cursor ? " sel" : ""}`}
+                onMouseDown={() => setCursor(i)}
+                onClick={() => enter(row)}
+                role="option"
+                aria-selected={i === cursor}
+              >
+                <span className="nm"><span className="d">▴ ..</span></span>
+                <span className="sz" />
+                <span className="dt" />
+              </div>
+            );
+          }
+          const entry = row.entry!;
           const isMarked = marked.has(entry.path);
           const label = ALWAYS_VISIBLE[entry.name];
           return (
@@ -167,12 +233,14 @@ export function FilesView({
               key={entry.path}
               className={`row${i === cursor ? " sel" : ""}${isMarked ? " marked" : ""}`}
               onMouseDown={() => setCursor(i)}
-              onClick={() => enter(entry)}
+              onClick={() => enter(row)}
               role="option"
               aria-selected={i === cursor}
             >
-              <span className="nm">
-                {entry.dir ? <span className="d">▸ {entry.name}/</span> : (
+              <span className="nm" style={{ paddingLeft: `${row.depth}em` }}>
+                {entry.dir ? (
+                  <span className="d">{row.expanded ? "▾" : "▸"} {entry.name}/</span>
+                ) : (
                   <>{isMarked ? <span className="mark">✓ </span> : "  "}{entry.name}</>
                 )}
               </span>
@@ -184,7 +252,8 @@ export function FilesView({
         {rows.length === 0 && !error && <div className="dim">(empty)</div>}
       </div>
       <div className="tb files-tb">
-        {summarize(rows, marked.size)}{showHidden ? " · hidden shown" : ""}
+        {summarize(visibleEntries(entries, showHidden), marked.size)}
+        {showHidden ? " · hidden shown" : ""}
       </div>
     </>
   );

@@ -119,10 +119,22 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
     }
 
     case "session.rewind":
+    case "session.clear": {
+      // Cancel anything running first: clearing under a live loop would leave the
+      // turn writing into a log the user just emptied.
+      ctx.loop.cancel(intent.sessionId);
+      await ctx.sessions.clear(intent.sessionId);
+      const meta = await ctx.sessions.readMeta(intent.sessionId);
+      ctx.broadcast(ev("session.events", {
+        sessionId: intent.sessionId, meta, groups: [], touched: [],
+      }));
+      ctx.broadcast(ev("toast", { level: "info", text: "session cleared" }));
+      return;
+    }
+
     case "session.dropGroup":
     case "session.dropToolOutput":
     case "session.compact":
-    case "session.clear":
     case "permission.answer":
     case "ask.answer":
       throw new Error(`${intent.type} arrives with the agent loop`);

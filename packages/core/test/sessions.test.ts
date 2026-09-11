@@ -88,3 +88,35 @@ describe("toGroups", () => {
     expect(g!.cancelled).toBe(true);
   });
 });
+
+describe("clear", () => {
+  it("empties the log but keeps the session", async () => {
+    const root = await makeRepo();
+    const store = new SessionStore(root);
+    const { id } = await store.create("keep my name");
+    await store.append(id, { t: "user", id: "g1", ts: 1, text: "hi", attachments: [] });
+    await store.clear(id);
+
+    expect(await store.read(id)).toEqual([]);
+    // The session itself survives — "clear" forgets the conversation, not the session.
+    const meta = await store.readMeta(id);
+    expect(meta.name).toBe("keep my name");
+    expect((await store.list()).map((m) => m.id)).toContain(id);
+  });
+
+  it("drops snapshots, whose groups are gone", async () => {
+    const root = await makeRepo();
+    const store = new SessionStore(root);
+    const meta = await store.create();
+    await store.writeMeta({ ...meta, snapshots: [{ groupId: "g1", gitRef: "refs/x" }] });
+    await store.clear(meta.id);
+    expect((await store.readMeta(meta.id)).snapshots).toEqual([]);
+  });
+
+  it("is safe on an already empty session", async () => {
+    const store = new SessionStore(await makeRepo());
+    const { id } = await store.create();
+    await store.clear(id);
+    expect(await store.read(id)).toEqual([]);
+  });
+});

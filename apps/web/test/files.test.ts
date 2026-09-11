@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FsEntry } from "@aicommander/protocol";
 import {
-  formatDate, formatSize, isHidden, joinPath, parentOf, summarize, visibleEntries,
+  buildRows, formatDate, formatSize, isHidden, joinPath, parentOf, summarize, visibleEntries,
 } from "../src/files.js";
 
 const e = (name: string, dir = false, size = 0, mtime = 0): FsEntry =>
@@ -114,5 +114,53 @@ describe("formatSize on small files", () => {
   it("still uses the fraction once it is meaningful", () => {
     expect(formatSize(307, false)).toBe(".3k");
     expect(formatSize(1024, false)).toBe("1.0k");
+  });
+});
+
+describe("buildRows", () => {
+  const dir = (name: string): FsEntry => e(name, true);
+
+  it("puts a parent link first when not at the root", () => {
+    const rows = buildRows([e("a.md")], false, new Map(), false);
+    expect(rows[0]!.kind).toBe("up");
+    expect(rows[1]!.entry?.name).toBe("a.md");
+  });
+
+  it("has no parent link at the root", () => {
+    const rows = buildRows([e("a.md")], false, new Map(), true);
+    expect(rows[0]!.kind).toBe("entry");
+  });
+
+  it("inlines an expanded directory's children, indented", () => {
+    const rows = buildRows(
+      [dir("src"), e("z.md")],
+      false,
+      new Map([["src", [e("main.c"), e("util.c")]]]),
+      true,
+    );
+    expect(rows.map((r) => r.entry?.name)).toEqual(["src", "main.c", "util.c", "z.md"]);
+    expect(rows[1]!.depth).toBe(1);
+    expect(rows[0]!.expanded).toBe(true);
+  });
+
+  it("leaves a collapsed directory alone", () => {
+    const rows = buildRows([dir("src")], false, new Map(), true);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.expanded).toBe(false);
+  });
+
+  it("nests deeper expansions", () => {
+    const rows = buildRows(
+      [dir("a")],
+      false,
+      new Map([["a", [dir("b")]], ["b", [e("c.md")]]]),
+      true,
+    );
+    expect(rows.map((r) => r.depth)).toEqual([0, 1, 2]);
+  });
+
+  it("hides dotfiles inside an expanded directory too", () => {
+    const rows = buildRows([dir("src")], false, new Map([["src", [e(".hidden"), e("a.c")]]]), true);
+    expect(rows.map((r) => r.entry?.name)).toEqual(["src", "a.c"]);
   });
 });

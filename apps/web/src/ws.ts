@@ -91,10 +91,14 @@ export function reduce(state: UiState, event: Event): UiState {
       // transcript on the post-turn refresh would drop the streamed tool rows, which the
       // groups do not carry — so rows are only rebuilt when the session actually changes.
       const sameSession = state.sessionId === event.sessionId;
+      // An empty group list for the session we are already in means it was cleared,
+      // so the rows go with it — otherwise a refresh keeps the streamed tool rows the
+      // groups do not carry.
+      const keepRows = sameSession && state.rows.length > 0 && event.groups.length > 0;
       return {
         ...state,
         sessionId: event.sessionId,
-        rows: sameSession && state.rows.length > 0 ? state.rows : groupsToRows(event.groups),
+        rows: keepRows ? state.rows : groupsToRows(event.groups),
         touched: event.touched,
       };
     }

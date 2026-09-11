@@ -955,7 +955,12 @@ function Prompt({
         setSuggestion((i) => Math.max(0, i - 1));
         return;
       }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+      // Tab always completes. Enter completes only while the typed text is still a
+      // prefix of something — once it names a command exactly, Enter runs it, so
+      // "/clear" does not need a second Enter to get past its own suggestion.
+      const exact = completing?.sigil === "/"
+        && suggestions.some((sg) => sg.value === completing.query.toLowerCase());
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !exact)) {
         e.preventDefault();
         applySuggestion(suggestions[suggestion]!.value);
         return;

@@ -90,6 +90,21 @@ export class SessionStore {
     return out;
   }
 
+  /**
+   * Empty a session without deleting it (§3 session.clear).
+   *
+   * The log is truncated rather than the directory removed: the session keeps its id,
+   * name and place in the list, so "clear" means "forget this conversation", not
+   * "throw away the session I named". Snapshots are dropped with it, since the groups
+   * they belong to are gone.
+   */
+  async clear(id: string): Promise<void> {
+    const dir = sessionPath(this.root, id);
+    await writeFile(join(dir, "session.jsonl"), "");
+    const meta = await this.readMeta(id).catch(() => undefined);
+    if (meta) await this.writeMeta({ ...meta, snapshots: [] });
+  }
+
   async delete(id: string): Promise<void> {
     await rm(sessionPath(this.root, id), { recursive: true, force: true });
   }
