@@ -1,6 +1,6 @@
 # Progress
 
-Current milestone: **M0 — "Claude Code in a browser"**
+Current milestone: **M1 — Commander shell** (M0 complete)
 
 Update the checklist as items land. One commit per item (`M0: protocol package` style).
 
@@ -10,15 +10,23 @@ Update the checklist as items land. One commit per item (`M0: protocol package` 
 
 - [x] 1. pnpm monorepo + `packages/protocol` (zod: WS intents, events, tool schemas, config)
 - [x] 2. Backend `serve` with WS (`packages/core` + `bin/aicommander`), HTTP `/file`, `/upload`, `/static`, `--brain` override
-- [ ] 3. Web app shell — single panel, chat only (React + Vite, tokens from mockups)
+- [x] 3. Web app shell — single panel, chat only (React + Vite, tokens from mockups)
 - [x] 4. Brain client — streaming, tools, `toolFormat: auto` (OpenAI native + text-tag fallback)
 - [~] 5. Core tools — read_file, write_file, edit_file, glob, grep, shell, git ✓;
       `ask_user` still to do (needs the modal round trip, lands with M2 permissions)
 - [x] 6. Session store — `session.jsonl` + `meta.json`; reload restores the chat
 - [x] 7. Esc cancel (mid-loop, keeps partial text, marks group `cancelled`)
 
-**Demo (must pass before M1):** open `~/lab/x`, ask "list the files and summarize BUILDME.md",
-see streaming tool calls, cancel mid-loop, reload the page → same session.
+**Demo — PASSED** 2026-09-10, live against `192.168.1.44:8001` (llama.cpp, `local-brain`,
+27B Q4_K_M, 98k ctx), driven through the real browser UI:
+
+1. open the repo → top line shows path, brain, `ctx 0/98k`
+2. "list the files and summarize BUILDME.md" → streaming `glob`/`shell` + `read_file`
+   (over-cap, marked `truncated`), correct two-sentence summary, 2 tools in ~8s
+3. `sleep 40` shell command, Esc mid-loop → `cancelled` in under a second
+4. reload → same session, transcript restored (2 user turns before and after)
+
+Still open from M0: `ask_user` (needs the modal round trip; lands with M2 permissions).
 
 ---
 

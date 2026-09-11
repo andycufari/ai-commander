@@ -121,7 +121,7 @@ fs.content { intentId, path, content, hash }               // ← fs.read
 git.result { intentId, action, text }                      // ← any git.* intent
 session.list { sessions: SessionMeta[] }                   // on connect
 session.events { sessionId, meta, groups }                 // replayed log, on open + reconnect
-config { config }                                          // merged global+project, on connect and after options.set
+config { config, root }                                    // merged global+project + repo root, on connect and after options.set
 ```
 
 ---

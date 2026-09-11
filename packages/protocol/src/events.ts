@@ -127,7 +127,12 @@ export const SessionEvents = event("session.events", {
   meta: SessionMeta,
   groups: z.array(Group),
 });
-export const ConfigEvent = event("config", { config: Config });
+/** Sent on connect: the merged config plus what the shell's top line needs (§10). */
+export const ConfigEvent = event("config", {
+  config: Config,
+  /** Absolute repo root; the top line shows it with $HOME collapsed to ~. */
+  root: z.string(),
+});
 
 export const Event = z.discriminatedUnion("type", [
   SessionStateEvent, TurnStart, Token,

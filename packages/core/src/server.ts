@@ -16,6 +16,10 @@ export interface ServeOptions {
   port: number;
   /** `serve --brain <url>` — overrides the endpoint from both config files. */
   brain?: string;
+  /** `serve --model <id>` — overrides the model, whether given or discovered. */
+  model?: string;
+  /** Context length discovered from the endpoint, when it reports one. */
+  ctx?: number;
   /** Static web build to serve at `/`; omitted in dev, where Vite serves the app. */
   staticDir?: string;
 }
@@ -49,7 +53,12 @@ export async function serve(opts: ServeOptions): Promise<Serving> {
   const root = await resolveRoot(opts.root);
   await ensureProjectDir(root);
 
-  const override = opts.brain ? { brain: { endpoint: opts.brain } } : undefined;
+  const brainOverride: Record<string, string> = {};
+  if (opts.brain) brainOverride.endpoint = opts.brain;
+  if (opts.model) brainOverride.model = opts.model;
+  const overrideBrain: Record<string, string | number> = { ...brainOverride };
+  if (opts.ctx) overrideBrain.ctx = opts.ctx;
+  const override = Object.keys(overrideBrain).length ? { brain: overrideBrain } : undefined;
   const { config, rules } = await loadConfig(root, override);
 
   const sessions = new SessionStore(root);
@@ -120,7 +129,7 @@ export async function serve(opts: ServeOptions): Promise<Serving> {
 /** On connect the client gets everything it needs to render without asking (§2). */
 async function onConnect(ws: WebSocket, ctx: Ctx): Promise<void> {
   const send = (e: Event) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(e));
-  send({ id: randomUUID(), type: "config", config: ctx.config });
+  send({ id: randomUUID(), type: "config", config: ctx.config, root: ctx.root });
   send({ id: randomUUID(), type: "session.list", sessions: await ctx.sessions.list() });
 }
 

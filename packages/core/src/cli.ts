@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { listModels } from "./discover.js";
 import { serve } from "./server.js";
 
 /** §1: `aicommander serve <repo> [--port] [--brain <url>]` */
@@ -9,6 +10,8 @@ const USAGE = `aicommander serve <repo> [options]
 
   --port <n>      port to listen on (default 7777, 0 picks a free one)
   --brain <url>   OpenAI-compatible endpoint, overriding config.json
+  --model <id>    model id, overriding config.json. With --brain and no --model,
+                  the endpoint is asked and a single available model is adopted.
   --static <dir>  serve a built web app from this directory
   -h, --help      this
 `;
@@ -41,6 +44,7 @@ interface Parsed {
   repo: string;
   port: number;
   brain?: string;
+  model?: string;
   /** What the user typed, kept only so the banner can show what changed. */
   rawBrain?: string;
   staticDir?: string;
@@ -53,6 +57,7 @@ export function parseArgs(argv: string[]): Parsed {
   let repo: string | undefined;
   let port = 7777;
   let brain: string | undefined;
+  let model: string | undefined;
   let rawBrain: string | undefined;
   let staticDir: string | undefined;
 
@@ -76,6 +81,9 @@ export function parseArgs(argv: string[]): Parsed {
         brain = normalizeBrainUrl(rawBrain);
         break;
       }
+      case "--model":
+        model = next();
+        break;
       case "--static":
         staticDir = resolve(next());
         break;
@@ -87,7 +95,7 @@ export function parseArgs(argv: string[]): Parsed {
   }
 
   if (!repo) throw new Error(`serve needs a repo path\n\n${USAGE}`);
-  return { repo: resolve(repo), port, brain, rawBrain, staticDir };
+  return { repo: resolve(repo), port, brain, model, rawBrain, staticDir };
 }
 
 export async function main(): Promise<void> {
@@ -98,10 +106,32 @@ export async function main(): Promise<void> {
   }
 
   const args = parseArgs(argv);
+
+  // --brain with no --model: adopt the endpoint's model when it serves exactly one.
+  let model = args.model;
+  let ctx: number | undefined;
+  let adopted: string | undefined;
+  let discoveryNote: string | undefined;
+  if (args.brain) {
+    const found = await listModels(args.brain);
+    ctx = found.ctx;
+    if (found.error) discoveryNote = `could not ask ${args.brain}/models (${found.error})`;
+    else if (model) {
+      // --model was explicit; only the context length is worth adopting.
+    } else if (found.ids.length === 1) {
+      model = found.ids[0];
+      adopted = model;
+    } else if (found.ids.length > 1) {
+      discoveryNote = `${found.ids.length} models available (${found.ids.slice(0, 4).join(", ")}${found.ids.length > 4 ? ", …" : ""}) — pass --model to choose`;
+    }
+  }
+
   const serving = await serve({
     root: args.repo,
     port: args.port,
     brain: args.brain,
+    model,
+    ctx,
     staticDir: args.staticDir,
   });
 
@@ -114,6 +144,14 @@ export async function main(): Promise<void> {
   // Say so when /v1 was appended, so the logged URL is never a surprise.
   if (args.brain && args.rawBrain && args.rawBrain !== args.brain) {
     process.stdout.write(`         normalized from ${args.rawBrain}\n`);
+  }
+  if (adopted) {
+    process.stdout.write(
+      `         model adopted from the endpoint (it serves only ${adopted})` +
+        `${ctx ? `, ctx ${ctx}` : ""}\n`,
+    );
+  } else if (discoveryNote) {
+    process.stdout.write(`         ${discoveryNote}\n`);
   }
 
   const stop = () => {

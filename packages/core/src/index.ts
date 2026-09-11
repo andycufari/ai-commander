@@ -8,4 +8,5 @@ export { BrainClient, BrainError, type BrainMessage, type BrainTurn, type ToolSp
 export { runTool, toolSpecs, capOutput, globFiles, globToRegExp, type ToolCtx } from "./tools.js";
 export { parseTextToolCalls, repairJson, extractFirstObject, stripToolMarkup, ToolParseError } from "./toolcalls.js";
 export { zodToJsonSchema } from "./jsonschema.js";
-export { parseArgs, main, runCli } from "./cli.js";
+export { parseArgs, normalizeBrainUrl, main, runCli } from "./cli.js";
+export { listModels, type Discovery } from "./discover.js";

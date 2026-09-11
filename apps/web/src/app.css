@@ -1,0 +1,142 @@
+/* Shell styles — the `.screen` grid from docs/mockups/harness-layouts-v1-commander.html,
+   scaled from a 540px mockup frame to the full viewport. Class names match the mockup
+   so the two stay comparable. */
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.55 var(--mono);
+}
+
+/* topline · panels · status · fkeys */
+.screen {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  /* Grid items default to min-content width, which lets a long path stretch the
+     whole row past the viewport. Pinning the columns keeps every row inside it. */
+  grid-template-columns: minmax(0, 1fr);
+  padding: 6px;
+  gap: 0;
+  overflow: hidden;
+}
+
+/* The title is cut into the border at top:-9px and is ~17px tall, so the row needs
+   about half its height as headroom or the grid track above clips it. */
+.cols { padding-top: 12px; }
+
+.topline {
+  display: flex;
+  gap: 16px;
+  color: var(--dim);
+  padding: 0 4px 4px;
+  align-items: baseline;
+  white-space: nowrap;
+}
+/* A long repo path must neither wrap the line nor push the readouts off the edge:
+   it is the only element allowed to shrink, and it ellipsises when it must. */
+.topline .path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.topline b { color: var(--ink); font-weight: 500; }
+.topline .r { margin-left: auto; display: flex; gap: 16px; flex: none; }
+.topline .hi { color: var(--hi); }
+.topline .amber { color: var(--amber); }
+
+/* M0 is one panel; the two-column grid arrives with M1. */
+.cols { display: grid; grid-template-columns: 1fr; min-height: 0; }
+
+/* ratatui block: border with the title cut into it */
+.blk {
+  position: relative;
+  border: 1px solid var(--line);
+  padding: 10px 8px 6px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Not `overflow: hidden` — that would clip the title cut into the top border.
+     The scrolling happens in .body, which clips itself. */
+  overflow: visible;
+}
+.blk.focus { border-color: var(--line-hi); }
+.blk > .t {
+  position: absolute; top: -9px; left: 8px;
+  background: var(--bg); padding: 0 5px; color: var(--dim); font-size: 11px;
+}
+.blk.focus > .t { color: var(--hi); }
+.blk > .tr {
+  position: absolute; top: -9px; right: 8px;
+  background: var(--bg); padding: 0 5px; color: var(--dim); font-size: 11px;
+}
+
+.body { overflow-y: auto; flex: 1; min-height: 0; }
+.body.wrap { white-space: normal; }
+
+/* chat rows */
+.u, .b { margin: 3px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.u::before { content: "you   "; color: var(--dim); }
+.b::before { content: "brain "; color: var(--amber); }
+.tool {
+  color: var(--dim);
+  padding-left: 6px;
+  border-left: 2px solid var(--line);
+  margin: 2px 0 2px 38px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tool i { color: var(--hi); font-style: normal; }
+.tool.err { color: var(--red); }
+.tool.err i { color: var(--red); }
+.spin { color: var(--amber); }
+.m { color: var(--hi); }
+.sk { color: var(--amber); }
+
+/* prompt attached to the bottom, grows to 40% of the panel then scrolls */
+.prompt {
+  border: 1px solid var(--line);
+  margin-top: 10px;
+  padding: 4px 8px;
+  color: var(--ink);
+  position: relative;
+  flex: none;
+}
+.blk.focus .prompt { border-color: var(--line-hi); }
+.prompt > .t {
+  position: absolute; top: -9px; left: 8px;
+  background: var(--bg); padding: 0 5px; color: var(--dim); font-size: 11px;
+}
+.prompt > .tb {
+  position: absolute; bottom: -9px; right: 8px;
+  background: var(--bg); padding: 0 5px; color: var(--dim); font-size: 11px;
+}
+.prompt .row { display: flex; align-items: flex-start; gap: 6px; }
+.prompt .chev { color: var(--dim); flex: none; user-select: none; }
+.prompt textarea {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  resize: none;
+  color: var(--ink);
+  font: inherit;
+  padding: 0;
+  overflow-y: auto;
+}
+.prompt textarea::placeholder { color: var(--dim); }
+
+/* status + fkeys */
+.status { display: flex; gap: 18px; color: var(--dim); padding: 6px 4px 2px; }
+.status .r { margin-left: auto; display: flex; gap: 18px; }
+.status .amber { color: var(--amber); }
+.status .red { color: var(--red); }
+
+.fkeys { display: flex; padding-top: 2px; }
+.fkeys span { flex: 1; color: var(--dim); white-space: nowrap; overflow: hidden; }
+.fkeys b { color: var(--amber); font-weight: 500; margin-right: 3px; }
+.fkeys .ctx { color: var(--ink); }
+
+/* the phosphor scrollbar, so the terminal look survives a long transcript */
+.body::-webkit-scrollbar, .prompt textarea::-webkit-scrollbar { width: 6px; }
+.body::-webkit-scrollbar-thumb, .prompt textarea::-webkit-scrollbar-thumb { background: var(--line); }
