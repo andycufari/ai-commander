@@ -9,6 +9,8 @@ import { loadConfig, ensureProjectDir } from "./config.js";
 import { PathEscapeError, resolveInRoot } from "./paths.js";
 import { SessionStore } from "./sessions.js";
 import { Loop } from "./loop.js";
+import { WorkspaceStore } from "./workspace.js";
+import { watchRepo } from "./watcher.js";
 import { handleIntent, type Ctx } from "./intents.js";
 
 export interface ServeOptions {
@@ -70,7 +72,10 @@ export async function serve(opts: ServeOptions): Promise<Serving> {
   };
 
   const loop = new Loop({ root, config, sessions, emit: broadcast });
-  const ctx: Ctx = { root, config, rules, sessions, loop, broadcast, send: broadcast };
+  const workspace = new WorkspaceStore(root);
+  const ctx: Ctx = { root, config, rules, sessions, loop, workspace, broadcast, send: broadcast };
+
+  const watcher = watchRepo(root, broadcast, () => randomUUID());
 
   const server = createServer((req, res) => {
     void httpRoute(req, res, root, opts.staticDir).catch((err: unknown) => {
@@ -118,17 +123,28 @@ export async function serve(opts: ServeOptions): Promise<Serving> {
     port,
     config,
     rules,
-    close: () =>
-      new Promise<void>((resolve) => {
+    close: async () => {
+      await watcher.close();
+      // Write the layout before the process goes away, rather than losing up to one
+      // debounce window of it.
+      await workspace.flush();
+      await new Promise<void>((resolve) => {
         for (const ws of clients) ws.terminate();
         wss.close(() => server.close(() => resolve()));
-      }),
+      });
+    },
   };
 }
 
-/** On connect the client gets everything it needs to render without asking (§2). */
+/**
+ * On connect the client gets everything it needs to render without asking (§2).
+ *
+ * The workspace goes first and in the same batch: the UI holds its first paint until it
+ * arrives, so a restored layout never flashes the default one on the way in.
+ */
 async function onConnect(ws: WebSocket, ctx: Ctx): Promise<void> {
   const send = (e: Event) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(e));
+  send({ id: randomUUID(), type: "workspace", workspace: await ctx.workspace.load() });
   send({ id: randomUUID(), type: "config", config: ctx.config, root: ctx.root });
   send({ id: randomUUID(), type: "session.list", sessions: await ctx.sessions.list() });
 }

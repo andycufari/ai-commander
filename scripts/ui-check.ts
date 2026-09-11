@@ -282,17 +282,53 @@ export async function assertSurvivesResize(page: Page, viewSelector: string, lab
   await assertTitlesNotClipped(page);
 }
 
-/** Walk the files view to a path and open it, leaving the view in the other panel. */
-async function openViaFiles(page: Page, steps: string[]): Promise<void> {
+/**
+ * Put the app back to a default layout. Every group after this assumes one chat tab on
+ * the left and an empty right panel; workspace.json persists across runs, so without
+ * this the suite would drift with whatever was last arranged.
+ */
+async function resetWorkspace(page: Page): Promise<void> {
+  await page.eval(`(() => {
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws');
+    return new Promise((resolve) => {
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ id: 'reset', type: 'workspace.set', patch: {
+          gutter: 0.5, focus: 'left', collapsed: null,
+          panels: { left: { tabs: [{ view: 'chat' }], active: 0 }, right: { tabs: [], active: 0 } },
+          marked: [], promptDraft: '',
+        } }));
+        setTimeout(() => { ws.close(); resolve(true); }, 300);
+      };
+    });
+  })()`);
   await page.reload();
   await sleep(2500);
+}
+
+/** Walk the files view to a path and open it, leaving the view in the other panel. */
+/**
+ * Open a repo path through the files view, navigating by name rather than by a count of
+ * arrow presses — a positional walk silently opens the wrong file the moment the
+ * directory gains an entry.
+ */
+async function openViaFiles(page: Page, segments: string[]): Promise<void> {
+  // From a known shell, not whatever the previous group left persisted.
+  await resetWorkspace(page);
   await key(page, "Tab");
   // ⌃T is the pick modal; its "files" entry is what opens a files tab.
   await key(page, "t", { ctrl: true, settle: 400 });
   await key(page, "ArrowDown", { settle: 120 });
   await key(page, "Enter", { settle: 900 });
-  for (const k of steps) {
-    await key(page, k, { focus: ".files", settle: k === "Enter" ? 900 : 250 });
+
+  for (const segment of segments) {
+    // One line: a newline inside this expression ends up mid-literal in the page.
+    const index = await page.eval<number>(
+      `[...document.querySelectorAll('.files .row:not(.up) .nm')].findIndex(n => n.textContent.replace(/^▸/, '').replace(/\\/$/, '').trim() === ${JSON.stringify(segment)})`);
+    if (index < 0) throw new Error(`ui-check: ${segment} not found in the files view`);
+    await page.eval(`document.querySelector('.files').focus()`);
+    await key(page, "Home", { settle: 120 });
+    for (let i = 0; i < index; i += 1) await key(page, "ArrowDown", { settle: 80 });
+    await key(page, "Enter", { settle: 900 });
   }
 }
 
@@ -306,6 +342,11 @@ async function main(): Promise<void> {
   try {
     await page.goto(url);
     await sleep(2500);
+
+    // The app now restores its last layout, so a previous run (or a session of real
+    // use) would leave this suite asserting against someone else's arrangement.
+    // Reset to a known shell first; the restore group re-establishes its own state.
+    await resetWorkspace(page);
 
     const errors = await page.eval<string[]>(
       "(window.__uiErrors ??= [], window.__uiErrors)",
@@ -369,10 +410,8 @@ async function main(): Promise<void> {
       closed);
 
     group("files view");
-    // The tab checks above left a files tab open; start this group from a clean shell
-    // so each group asserts against a known layout rather than the previous one's.
-    await page.reload();
-    await sleep(2500);
+    // Each group starts from a known layout rather than the previous one's.
+    await resetWorkspace(page);
     // Open a files tab in the right panel and drive the NC keys.
     await key(page, "Tab");
     await key(page, "t", { ctrl: true, settle: 400 });
@@ -440,7 +479,7 @@ async function main(): Promise<void> {
 
     group("editor");
     // docs/ then NOTES.md — a markdown file, which opens as a preview.
-    await openViaFiles(page, ["ArrowDown", "Enter", "ArrowDown", "Enter"]);
+    await openViaFiles(page, ["docs", "NOTES.md"]);
     const preview = await page.eval<{ md: boolean; title: string }>(`(() => ({
       md: !!document.querySelector('.body.md'),
       title: document.querySelector('.cols > .blk .t')?.textContent ?? '',
@@ -459,7 +498,7 @@ async function main(): Promise<void> {
 
     group("image viewer");
     // hw/ then board.png
-    await openViaFiles(page, ["ArrowDown", "ArrowDown", "Enter", "Enter"]);
+    await openViaFiles(page, ["hw", "board.png"]);
     const img = await page.eval<{ has: boolean; caption: string }>(`(() => ({
       has: !!document.querySelector('.body.image img'),
       caption: document.querySelector('.image-tb')?.textContent ?? '',
@@ -471,8 +510,7 @@ async function main(): Promise<void> {
     await assertSurvivesResize(page, ".body.image", "image viewer");
 
     group("pickers");
-    await page.reload();
-    await sleep(2500);
+    await resetWorkspace(page);
     const modalState = () => page.eval<{ title: string; rows: string[]; hint: string } | null>(
       `(() => { const m = document.querySelector('.modal.pick');
         return m ? { title: m.querySelector('.t')?.textContent ?? '',
@@ -525,9 +563,61 @@ async function main(): Promise<void> {
       `[...document.querySelectorAll('.cols > .blk')].findIndex(b => b.classList.contains('focus'))`);
     check("⌃1 focuses the left panel", leftFocused === 0, { index: leftFocused });
 
-    group("mentions");
+    group("workspace restore");
+    // Arrange a layout, reload, and assert it came back — including no flash of the
+    // default gutter on the way in.
+    await resetWorkspace(page);
+    await key(page, "ArrowLeft", { ctrl: true });
+    await key(page, "ArrowLeft", { ctrl: true });
+    await page.fill(".prompt textarea", "a half-written thought");
+    await sleep(700);
+
+    const arranged = await page.eval<{ gutter: number; draft: string }>(`(() => {
+      const c = document.querySelector('.cols').getBoundingClientRect();
+      const b = document.querySelector('.cols > .blk').getBoundingClientRect();
+      return { gutter: +(b.width / c.width).toFixed(2),
+               draft: document.querySelector('.prompt textarea')?.value ?? '' };
+    })()`);
+
+    // Sample every frame from the very first one: injected after the reload, the
+    // sampler would have already missed the frames a flash would appear in.
+    // Sample on a time budget, not a frame count: the app paints a bare shell while it
+    // waits for the workspace, so the first frames have no .cols to measure at all.
+    // Sampled on an interval, not requestAnimationFrame: headless Chrome throttles
+    // animation frames on a page it does not consider visible, so a rAF loop fires
+    // once and stops — which looks exactly like "no samples" rather than a bug.
+    await page.onNewDocument(`window.__g = []; window.__gStart = Date.now();
+      window.__gTimer = setInterval(() => {
+        const c = document.querySelector('.cols'), b = document.querySelector('.cols > .blk');
+        if (c && b && c.getBoundingClientRect().width) {
+          window.__g.push(+(b.getBoundingClientRect().width / c.getBoundingClientRect().width).toFixed(2));
+        }
+        if (Date.now() - window.__gStart > 2500) clearInterval(window.__gTimer);
+      }, 16);`);
     await page.reload();
-    await sleep(2500);
+    await sleep(3000);
+
+    const restoredState = await page.eval<{ gutter: number; draft: string; samples: number[] }>(`(() => {
+      const c = document.querySelector('.cols').getBoundingClientRect();
+      const b = document.querySelector('.cols > .blk').getBoundingClientRect();
+      return { gutter: +(b.width / c.width).toFixed(2),
+               draft: document.querySelector('.prompt textarea')?.value ?? '',
+               samples: Array.from(window.__g ?? []) };
+    })()`);
+
+    check("the gutter is restored",
+      Math.abs(restoredState.gutter - arranged.gutter) < 0.02,
+      { arranged: arranged.gutter, restored: restoredState.gutter });
+    check("the prompt draft survives a reload", restoredState.draft === arranged.draft,
+      { arranged: arranged.draft, restored: restoredState.draft });
+    check("no flash of the default layout",
+      restoredState.samples.length > 0
+        && restoredState.samples.every((g) => Math.abs(g - arranged.gutter) < 0.02),
+      { distinct: [...new Set(restoredState.samples)] });
+    await assertNoOverflow(page);
+
+    group("mentions");
+    await resetWorkspace(page);
     await page.fill(".prompt textarea", "look at @docs/NOTES.md and @nothing here");
     await key(page, "Enter", { settle: 1200 });
     const mentions = await page.eval<{ links: string[]; text: string }>(`(() => {
@@ -562,8 +652,7 @@ async function main(): Promise<void> {
     await assertNoOverflow(page);
 
     group("focus");
-    await page.reload();
-    await sleep(2500);
+    await resetWorkspace(page);
     const before = await page.eval<string>("document.querySelector('.cols > .blk.focus')?.className ?? ''");
     await key(page, "Tab");
     const after = await page.eval<string>("[...document.querySelectorAll('.cols > .blk')].findIndex(e=>e.classList.contains('focus'))");
@@ -571,8 +660,7 @@ async function main(): Promise<void> {
     await key(page, "Tab");
 
     group("layout");
-    await page.reload();
-    await sleep(2500);
+    await resetWorkspace(page);
     await assertNoOverflow(page);
     await assertTitlesNotClipped(page);
     await assertPromptAttached(page);

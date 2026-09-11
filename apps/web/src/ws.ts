@@ -1,6 +1,8 @@
 import { randomUUID } from "./id.js";
 import { toolPath } from "./mentions.js";
-import type { Config, Event, Group, Intent, SessionMeta, TouchedFile } from "@aicommander/protocol";
+import type {
+  Config, Event, Group, Intent, SessionMeta, TouchedFile, Workspace,
+} from "@aicommander/protocol";
 
 /**
  * The browser only renders and sends intents (§2) — all state lives in the backend,
@@ -41,6 +43,17 @@ export interface UiState {
   git?: { branch: string; dirty: number; ahead: number };
   /** Files this session has touched, for ⌃⇧P (§11). Writes first, recent first. */
   touched: TouchedFile[];
+  /** The restored layout. Until it arrives the app does not paint, so a saved
+   *  layout never flashes the default one first (v2 §4). */
+  workspace?: Workspace;
+  /** Bumped by fs.changed, so the files view re-lists. */
+  revision: number;
+  /**
+   * Per-path change counter. A view keyed on its own path's count reloads once per
+   * change to *that* file — keying on the global revision instead would re-run on
+   * every unrelated change, and flipping a prop back to 0 re-runs it a second time.
+   */
+  fileRevisions: Record<string, number>;
   error?: string;
 }
 
@@ -55,6 +68,8 @@ export const initialState: UiState = {
   ctxUsed: 0,
   ctxMax: 0,
   touched: [],
+  revision: 0,
+  fileRevisions: {},
 };
 
 /** Local echo: the backend's turn.start carries no text, so a sent message would not
@@ -127,6 +142,15 @@ export function reduce(state: UiState, event: Event): UiState {
             : r,
         ),
       };
+
+    case "workspace":
+      return { ...state, workspace: event.workspace };
+
+    case "fs.changed": {
+      const fileRevisions = { ...state.fileRevisions };
+      for (const p of event.paths) fileRevisions[p] = (fileRevisions[p] ?? 0) + 1;
+      return { ...state, revision: state.revision + 1, fileRevisions };
+    }
 
     case "git.changed":
       return { ...state, git: { branch: event.branch, dirty: event.dirty, ahead: event.ahead } };

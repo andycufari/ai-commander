@@ -10,6 +10,7 @@ import { defaultRegistry } from "./viewers.js";
 import { addChips, removeChip, type Chip } from "./chips.js";
 import { linkifyMentions } from "./mentions.js";
 import { Pick, type PickItem } from "./Pick.js";
+import { toPatch, toRuntimeTabs } from "./restore.js";
 import type { Attachment } from "@aicommander/protocol";
 
 /** The shell: top line, two tabbed panels with a draggable gutter, status line,
@@ -71,15 +72,39 @@ export function App(): JSX.Element {
 
   const running = state.status === "running";
   const colsRef = useRef<HTMLDivElement>(null);
-  const layout = usePanelLayout({});
+  const layout = usePanelLayout({
+    gutter: state.workspace?.gutter,
+    focus: state.workspace?.focus,
+    collapsed: state.workspace?.collapsed ?? null,
+  });
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const drag = useGutterDrag(colsRef, layout.setGutter);
 
   // Each panel is a tabbed view host (§10). The chat tab is always there to start.
-  const left = usePanelTabs([{ id: "chat", view: "chat", title: "chat", dirty: false, conflict: false }], "chat");
+  const left = usePanelTabs([
+    { id: "chat", view: "chat", title: "chat", dirty: false, conflict: false, missing: false },
+  ], "chat");
   const right = usePanelTabs([]);
   const focused = layout.focus === "left" ? left : right;
+
+  // Restore the saved tabs once, as soon as the workspace lands (v2 §4).
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current || !state.workspace) return;
+    restored.current = true;
+    const { panels } = state.workspace;
+    if (panels.left.tabs.length > 0) {
+      const r = toRuntimeTabs(panels.left);
+      left.replaceAll(r.tabs, r.activeId);
+    }
+    if (panels.right.tabs.length > 0) {
+      const r = toRuntimeTabs(panels.right);
+      right.replaceAll(r.tabs, r.activeId);
+    }
+    if (state.workspace.promptDraft) setDraft(state.workspace.promptDraft);
+    if (state.workspace.marked.length) setMarked(state.workspace.marked);
+  }, [state.workspace, left, right]);
 
   // Toasts: bottom-right, 4s, stack 3 (§10).
   const [toasts, setToasts] = useState<{ id: number; level: "info" | "warning"; text: string }[]>([]);
@@ -88,6 +113,10 @@ export function App(): JSX.Element {
     setToasts((prev) => [...prev.slice(-2), { id, level, text }]);
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
   }, []);
+
+  /** Lifted so workspace.json can hold them (v2 §4: closing mid-thought loses nothing). */
+  const [draft, setDraft] = useState("");
+  const [marked, setMarked] = useState<string[]>([]);
 
   // Prompt attachments, as chips (§7). The M3 + picker adds to the same list.
   const [chips, setChips] = useState<Chip[]>([]);
@@ -168,6 +197,28 @@ export function App(): JSX.Element {
       }
     },
   };
+
+  // Push the layout to the backend whenever it changes. The backend debounces to
+  // 300ms, so this may fire on every keystroke of the draft without hitting disk.
+  useEffect(() => {
+    if (!restored.current) return;
+    conn.current?.send({
+      type: "workspace.set",
+      patch: toPatch({
+        gutter: layout.gutter,
+        focus: layout.focus,
+        collapsed: layout.collapsed,
+        left: { tabs: left.tabs, activeId: left.activeId },
+        right: { tabs: right.tabs, activeId: right.activeId },
+        marked,
+        promptDraft: draft,
+      }),
+    });
+  }, [
+    layout.gutter, layout.focus, layout.collapsed,
+    left.tabs, left.activeId, right.tabs, right.activeId,
+    marked, draft,
+  ]);
 
   /** Which pick modal is open, if any (§11). */
   const [pick, setPick] = useState<"menu" | "files" | "touched" | "sessions" | null>(null);
@@ -282,6 +333,8 @@ export function App(): JSX.Element {
               focused={layout.focus === side}
               chips={chips}
               onRemoveChip={(key) => setChips((prev) => removeChip(prev, key))}
+              text={draft}
+              onTextChange={setDraft}
             />
           </>
         );
@@ -291,6 +344,8 @@ export function App(): JSX.Element {
             conn={conn.current}
             path={tab.path ?? ""}
             focused={layout.focus === side}
+            revision={state.fileRevisions[tab.path ?? ""] ?? 0}
+            onMissing={(m) => (side === "left" ? left : right).update(tab.id, { missing: m })}
             mode={tab.mode ?? "edit"}
             onModeChange={(m) => (side === "left" ? left : right).update(tab.id, { mode: m })}
             onDirty={(d) => (side === "left" ? left : right).setDirty(tab.id, d)}
@@ -304,6 +359,7 @@ export function App(): JSX.Element {
           <ImageViewer
             path={tab.path ?? ""}
             focused={layout.focus === side}
+            revision={state.fileRevisions[tab.path ?? ""] ?? 0}
             onEscape={focusChat}
           />
         );
@@ -313,6 +369,9 @@ export function App(): JSX.Element {
             conn={conn.current}
             path={tab.path ?? "."}
             focused={layout.focus === side}
+            revision={state.revision}
+            marked={marked}
+            onMarkedChange={setMarked}
             onNavigate={(next) => {
               const host = side === "left" ? left : right;
               host.update(tab.id, { path: next, title: next === "." ? "files" : next.split("/").pop()! });
@@ -332,6 +391,12 @@ export function App(): JSX.Element {
       ? <span className="amber">running</span>
       : `${state.sessions.length} session${state.sessions.length === 1 ? "" : "s"}`;
   };
+
+  // v2 §4: restore exactly where you were. Painting the default layout first and
+  // correcting it a frame later is the flash this avoids.
+  if (!state.workspace) {
+    return <div className="screen booting" />;
+  }
 
   return (
     <div className="screen" style={{ ["--gutter" as string]: String(layout.gutter) }}>
@@ -476,7 +541,7 @@ function Panel({
               className={`tab${t.id === tabs.activeId ? " on" : ""}${t.conflict ? " conflict" : ""}`}
               onMouseDown={(e) => { e.stopPropagation(); onFocus(side); tabs.select(t.id); }}
             >
-              {t.title}{t.dirty ? " ●" : ""}
+              {t.title}{t.dirty ? " ●" : ""}{t.missing ? " (missing)" : ""}
               <i
                 className="x"
                 title="close"
@@ -607,7 +672,7 @@ function Mention({
 }
 
 function Prompt({
-  onSend, running, queued, focused, chips, onRemoveChip,
+  onSend, running, queued, focused, chips, onRemoveChip, text, onTextChange,
 }: {
   onSend: (text: string, attachments: Attachment[]) => void;
   running: boolean;
@@ -615,8 +680,11 @@ function Prompt({
   focused: boolean;
   chips: Chip[];
   onRemoveChip: (key: string) => void;
+  /** Lifted to the app so workspace.json can hold the draft (v2 §4). */
+  text: string;
+  onTextChange: (text: string) => void;
 }): JSX.Element {
-  const [text, setText] = useState("");
+  const setText = onTextChange;
   const ref = useRef<HTMLTextAreaElement>(null);
 
   // Grow with the text up to 40% of the panel, then scroll (§10).

@@ -6,10 +6,17 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
-  "bin": { "aicommander": "./dist/cli.js" },
-  "files": ["dist"],
+  "bin": {
+    "aicommander": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b",
@@ -19,7 +26,8 @@
   "dependencies": {
     "@aicommander/protocol": "workspace:*",
     "ws": "^8.18.0",
-    "zod": "^3.24.1"
+    "zod": "^3.24.1",
+    "chokidar": "^4.0.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

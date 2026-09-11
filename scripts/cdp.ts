@@ -22,6 +22,12 @@ const CHROME_CANDIDATES = [
 export interface Page {
   goto(url: string): Promise<void>;
   reload(): Promise<void>;
+  /**
+   * Run an expression in every future page load, before any of the page's own script.
+   * The only way to observe the first painted frames: anything injected after a
+   * reload has already missed them.
+   */
+  onNewDocument(expression: string): Promise<void>;
   /** Evaluate an expression in the page and return it by value. */
   eval<T = unknown>(expression: string): Promise<T>;
   screenshot(path: string): Promise<void>;
@@ -119,6 +125,9 @@ export async function launch(opts: { width?: number; height?: number; port?: num
     reload: async () => {
       await cmd("Page.reload");
       await sleep(300);
+    },
+    onNewDocument: async (expression) => {
+      await cmd("Page.addScriptToEvaluateOnNewDocument", { source: expression });
     },
     eval: evaluate,
     screenshot: async (path) => {

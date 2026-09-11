@@ -44,12 +44,15 @@ export interface EditorProps {
   onConflict: (conflict: boolean) => void;
   onToast: (level: "info" | "warning", text: string) => void;
   onEscape: () => void;
-  /** Bumped by fs.changed (M1 step 6). */
+  /** Bumped when fs.changed names this path. */
   revision?: number;
+  /** The file stopped existing, or came back. */
+  onMissing?: (missing: boolean) => void;
 }
 
 export function Editor({
   conn, path, focused, mode, onModeChange, onDirty, onConflict, onToast, onEscape, revision,
+  onMissing,
 }: EditorProps): JSX.Element {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>();
@@ -59,8 +62,8 @@ export function Editor({
    * them in refs keeps the load effect and the CodeMirror instance keyed on the file
    * alone — otherwise every parent render refetched the file and threw the buffer away.
    */
-  const cb = useRef({ onDirty, onConflict, onToast, onEscape, onModeChange });
-  cb.current = { onDirty, onConflict, onToast, onEscape, onModeChange };
+  const cb = useRef({ onDirty, onConflict, onToast, onEscape, onModeChange, onMissing });
+  cb.current = { onDirty, onConflict, onToast, onEscape, onModeChange, onMissing };
   const [loaded, setLoaded] = useState<string>();
   const [error, setError] = useState<string>();
   /** Hash of the content we loaded — fs.write rejects if disk has moved on (§3). */
@@ -69,17 +72,40 @@ export function Editor({
    *  originally loaded text, or the tab would stay marked after a save. */
   const savedDoc = useRef<string>("");
   const dirtyRef = useRef(false);
+  /** False until the first successful read, so a reload can be told from a first load. */
+  const loadedOnce = useRef(false);
 
   const isMarkdown = ["md", "markdown", "mdx"].includes(extensionOf(path));
 
-  // Load the file.
+  /**
+   * Load the file, and reload it when the watcher says it changed on disk.
+   *
+   * A clean buffer takes the new content silently — that is the whole point of watching.
+   * A dirty buffer is left alone and marked conflict, the same path as a ⌃S hash
+   * mismatch: the user's unsaved edits are the thing worth protecting, and the M2
+   * warning modal will offer the choice properly.
+   */
   useEffect(() => {
     let cancelled = false;
     if (!conn) return;
+    const isReload = loadedOnce.current;
+
     conn.request({ type: "fs.read", path }, "fs.content")
       .then((e) => {
         if (cancelled) return;
         const reply = e as { content: string; hash: string };
+        cb.current.onMissing?.(false);
+
+        if (isReload && dirtyRef.current) {
+          if (reply.hash !== baseHash.current) {
+            cb.current.onConflict(true);
+            cb.current.onToast("warning", `${path} changed on disk — your unsaved edits are kept`);
+          }
+          return;
+        }
+        if (isReload && reply.content === savedDoc.current) return;
+
+        loadedOnce.current = true;
         baseHash.current = reply.hash;
         savedDoc.current = reply.content;
         setLoaded(reply.content);
@@ -88,7 +114,12 @@ export function Editor({
         cb.current.onDirty(false);
         cb.current.onConflict(false);
       })
-      .catch((err: Error) => { if (!cancelled) setError(err.message); });
+      .catch((err: Error) => {
+        if (cancelled) return;
+        // A restored tab whose file is gone keeps its place and says so (§10).
+        cb.current.onMissing?.(true);
+        if (!loadedOnce.current) setError(err.message);
+      });
     return () => { cancelled = true; };
   }, [conn, path, revision]);
 
@@ -102,6 +133,7 @@ export function Editor({
         // without a second read.
         baseHash.current = (e as { hash: string }).hash;
         savedDoc.current = content;
+        loadedOnce.current = true;
         dirtyRef.current = false;
         cb.current.onDirty(false);
         cb.current.onConflict(false);

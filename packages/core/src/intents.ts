@@ -12,6 +12,7 @@ import { resolveInRoot, toRepoPath } from "./paths.js";
 import { globFiles } from "./tools.js";
 import { SessionStore } from "./sessions.js";
 import type { Loop } from "./loop.js";
+import type { WorkspaceStore } from "./workspace.js";
 import { join } from "node:path";
 
 const run = promisify(execFile);
@@ -22,6 +23,7 @@ export interface Ctx {
   rules: Rules;
   sessions: SessionStore;
   loop: Loop;
+  workspace: WorkspaceStore;
   /** To every connected client — state the UI must agree on. */
   broadcast: (event: Event) => void;
   /** To the client that sent the intent — replies and errors. */
@@ -251,15 +253,13 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
     }
 
     case "workspace.get": {
-      ctx.send(ev("workspace", { workspace: await readWorkspace(ctx.root) }));
+      ctx.send(ev("workspace", { workspace: await ctx.workspace.load() }));
       return;
     }
     case "workspace.set": {
-      const next = WorkspaceSchema.parse({ ...(await readWorkspace(ctx.root)), ...intent.patch });
-      await writeFile(
-        join(projectDir(ctx.root), "workspace.json"),
-        `${JSON.stringify(next, null, 2)}\n`,
-      );
+      // Merged and debounced by the store; the broadcast is immediate so a second
+      // client sees the change without waiting for the disk write.
+      const next = await ctx.workspace.set(intent.patch);
       ctx.broadcast(ev("workspace", { workspace: next }));
       return;
     }
@@ -300,13 +300,5 @@ export async function gitState(root: string): Promise<{ branch: string; dirty: n
   return { branch, dirty, ahead };
 }
 
-async function readWorkspace(root: string): Promise<Workspace> {
-  try {
-    const raw = await readFile(join(projectDir(root), "workspace.json"), "utf8");
-    return WorkspaceSchema.parse(JSON.parse(raw));
-  } catch {
-    return DEFAULT_WORKSPACE;
-  }
-}
 
 export { basename };

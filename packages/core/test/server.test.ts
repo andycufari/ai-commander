@@ -179,13 +179,33 @@ describe("serve", () => {
     expect(e.intentId).toBe("i-git");
   });
 
-  it("persists the workspace across a set/get", async () => {
+  it("broadcasts a workspace change immediately", async () => {
     send({ id: "i-ws", type: "workspace.set", patch: { gutter: 0.35, focus: "right" } });
     const e = (await waitFor((x) => x.type === "workspace")) as Extract<Event, { type: "workspace" }>;
     expect(e.workspace).toMatchObject({ gutter: 0.35, focus: "right" });
-    const onDisk = JSON.parse(await readFile(join(root, ".aicommander", "workspace.json"), "utf8"));
-    expect(onDisk.gutter).toBe(0.35);
   });
+
+  it("writes the workspace to disk after the debounce", async () => {
+    send({ id: "i-ws2", type: "workspace.set", patch: { gutter: 0.4 } });
+    await waitFor((x) => x.type === "workspace");
+    // 300ms debounce; a disk write per keystroke of the prompt draft would be silly.
+    await new Promise((r) => setTimeout(r, 600));
+    const onDisk = JSON.parse(await readFile(join(root, ".aicommander", "workspace.json"), "utf8"));
+    expect(onDisk.gutter).toBe(0.4);
+  }, 10000);
+
+  it("sends the workspace on connect, before anything else", async () => {
+    // The UI holds its first paint until this arrives, so a restored layout never
+    // flashes the default one.
+    const second = new WebSocket(`ws://127.0.0.1:${serving.port}/ws`);
+    const seen: string[] = [];
+    second.on("message", (raw) => seen.push((JSON.parse(raw.toString()) as Event).type));
+    await new Promise((r) => second.once("open", r));
+    await new Promise((r) => setTimeout(r, 400));
+    second.close();
+    expect(seen[0]).toBe("workspace");
+    expect(seen).toContain("config");
+  }, 10000);
 
   it("reports an unimplemented intent instead of dying", async () => {
     send({ id: "i-todo", type: "session.compact", sessionId: "whatever" });

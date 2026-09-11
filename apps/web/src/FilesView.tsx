@@ -23,29 +23,42 @@ export interface FilesViewProps {
   onOpen: (path: string) => void;
   /** @ on the marked set (or the cursor row when nothing is marked). */
   onMention: (attachments: Attachment[]) => void;
+  /** Marks live in the app so workspace.json can hold them (v2 §4). */
+  marked?: readonly string[];
   onMarkedChange?: (marked: string[]) => void;
 }
 
 export function FilesView({
-  conn, path, focused, revision, onNavigate, onOpen, onMention, onMarkedChange,
+  conn, path, focused, revision, onNavigate, onOpen, onMention,
+  marked: markedProp, onMarkedChange,
 }: FilesViewProps): JSX.Element {
   const [entries, setEntries] = useState<FsEntry[]>([]);
   const [error, setError] = useState<string>();
   const [cursor, setCursor] = useState(0);
-  const [marked, setMarked] = useState<Set<string>>(new Set());
+  const [marked, setMarked] = useState<Set<string>>(new Set(markedProp ?? []));
   const [showHidden, setShowHidden] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  /** False until the first listing, so a refresh can be told from a first load. */
+  const listedOnce = useRef(false);
 
+  /**
+   * List the directory, and re-list it when the watcher reports a change.
+   *
+   * A refresh keeps the cursor and the marks: the file you were looking at should still
+   * be under the cursor after the brain writes something elsewhere in the tree.
+   */
   useEffect(() => {
     let cancelled = false;
     if (!conn) return;
+    const isRefresh = listedOnce.current;
     conn
       .request({ type: "fs.list", path }, "fs.listed")
       .then((e) => {
         if (cancelled) return;
+        listedOnce.current = true;
         setEntries((e as { entries: FsEntry[] }).entries);
         setError(undefined);
-        setCursor(0);
+        if (!isRefresh) setCursor(0);
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
@@ -61,8 +74,11 @@ export function FilesView({
     onMarkedChange?.([...marked]);
   }, [marked, onMarkedChange]);
 
-  // Marks belong to the directory they were made in.
-  useEffect(() => { setMarked(new Set()); }, [path]);
+  // Marks belong to the directory they were made in — but survive a refresh of it.
+  useEffect(() => {
+    listedOnce.current = false;
+    setMarked(new Set());
+  }, [path]);
 
   const move = useCallback((delta: number) => {
     setCursor((c) => Math.max(0, Math.min(rows.length - 1, c + delta)));
