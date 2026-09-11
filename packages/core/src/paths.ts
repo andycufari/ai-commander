@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -57,8 +58,29 @@ export async function resolveInRoot(root: string, input: string): Promise<string
   return target;
 }
 
-/** Repo-relative form for display and for the protocol — always forward slashes. */
+/**
+ * Repo-relative form for display and for the protocol — always forward slashes.
+ *
+ * Both sides are normalised first. resolveInRoot returns realpath'd absolutes, and on
+ * macOS /var is a symlink to /private/var, so comparing a resolved path against an
+ * unresolved root produced a string of `../` instead of a repo path. The server
+ * realpaths its root at startup, but a caller with a raw root should not get garbage.
+ */
 export function toRepoPath(root: string, absolute: string): string {
   const rel = relative(root, absolute);
-  return rel === "" ? "." : rel.split(sep).join("/");
+  if (!rel.startsWith("..")) return rel === "" ? "." : rel.split(sep).join("/");
+
+  // The root and the path disagree about how the filesystem is spelled; try again
+  // against the resolved root before giving up.
+  const resolvedRoot = realpathSyncSafe(root);
+  const retry = relative(resolvedRoot, absolute);
+  return retry === "" ? "." : retry.split(sep).join("/");
 }
+
+const realpathSyncSafe = (path: string): string => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+};

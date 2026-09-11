@@ -91,4 +91,13 @@ describe("toRepoPath", () => {
     expect(toRepoPath(root, join(root, "src", "main.c"))).toBe("src/main.c");
     expect(toRepoPath(root, root)).toBe(".");
   });
+
+  it("copes with a root and a path spelled differently", async () => {
+    // resolveInRoot returns realpath'd absolutes; on macOS /var is a symlink to
+    // /private/var, so an unresolved root used to produce a string of ../ instead.
+    const root = await makeRepo();
+    const resolved = await resolveInRoot(root, "src/main.c");
+    expect(toRepoPath(root, resolved)).toBe("src/main.c");
+    expect(toRepoPath(resolved.slice(0, resolved.indexOf("/src")), resolved)).toBe("src/main.c");
+  });
 });

@@ -414,7 +414,9 @@ Each milestone ends with a demo you can run and a checklist. Don't start the nex
 ## 13. Conventions for working on this repo
 
 - **Commit per checklist item**, message `M2: repeat-call guard` style. Never batch a milestone into one commit.
-- **Tests**: vitest in `packages/core` for context assembly, permission matching, tool-call repair, snapshot/rewind, output capping. UI tested by hand against the mockups. A PR that touches the loop adds a test.
+- **Tests**: vitest in `packages/core` for context assembly, permission matching, tool-call repair, snapshot/rewind, output capping. A PR that touches the loop adds a test.
+- **Anything reachable through `handleIntent` gets an integration test that drives the real intent, and the test is written first.** Unit tests on the pieces are not enough: a duplicate `case` label once made every rewind clear the session instead, and every unit test still passed. The test must go through `handleIntent` itself.
+- UI is tested by `scripts/ui-check.ts` — CDP against a live backend, run after any UI change. Key probes use real `Input.dispatchKeyEvent`; synthetic events are untrusted and editors ignore them.
 - **Types first**: change `packages/protocol` before core or web. Both sides import from it; no ad-hoc event shapes.
 - **No component libraries, no Tailwind.** Tokens in `apps/web/src/tokens.css` copied from the mockups. If it doesn't look like `v1-commander.html`, it's wrong.
 - **Never write outside the repo root** from any tool. Add a test that proves it.

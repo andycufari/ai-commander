@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Config, DEFAULT_RULES, PartialConfig, Rules } from "@aicommander/protocol";
 
 /** §9: global (~/.aicommander) merged with project (.aicommander); project wins. */
@@ -83,7 +84,13 @@ export function mergeRules(base: Rules, project: Rules): Rules {
   return { danger, allow: pick(base.allow, project.allow) };
 }
 
-/** Create `.aicommander/` on first open (§4 layout). Returns true if it was created. */
+/**
+ * Create `.aicommander/` on first open (§4 layout). Returns true if it was created.
+ *
+ * system.md is copied from the global template, or from the one shipped with the
+ * package if the user has no global copy. It is only ever written when absent: the
+ * user edits it in-app (F4), and a later open must not throw that away.
+ */
 export async function ensureProjectDir(root: string): Promise<boolean> {
   const dir = projectDir(root);
   const existed = (await readJson(join(dir, "config.json"))) !== undefined;
@@ -97,5 +104,25 @@ export async function ensureProjectDir(root: string): Promise<boolean> {
       // already there — another process won the race, fine
     }
   }
+  await ensureSystemPrompt(dir);
   return !existed;
+}
+
+/** The manual shipped with the package — the fallback when there is no global copy. */
+const templateSystemPath = (): string =>
+  join(dirname(fileURLToPath(import.meta.url)), "..", "templates", "system.md");
+
+async function ensureSystemPrompt(dir: string): Promise<void> {
+  const target = join(dir, "system.md");
+  try {
+    await readFile(target, "utf8");
+    return;
+  } catch {
+    // absent, so seed it
+  }
+  const source = await readFile(join(globalDir(), "system.md"), "utf8")
+    .catch(() => readFile(templateSystemPath(), "utf8"))
+    .catch(() => undefined);
+  if (source === undefined) return;
+  await writeFile(target, source, { flag: "wx" }).catch(() => {});
 }
