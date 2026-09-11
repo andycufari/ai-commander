@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { Event } from "@aicommander/protocol";
-import type { PanelSide } from "@aicommander/protocol";
+import type { Event, PanelSide, Tab } from "@aicommander/protocol";
 import { connect, echoUser, initialState, reduce, type ChatRow, type Connection, type UiState } from "./ws.js";
 import { GUTTER_STEP, useGutterDrag, usePanelLayout } from "./panels.js";
+import { keysFor, usePanelTabs, type FKeySet, type PanelTabs } from "./tabs.js";
 
-/** The shell: top line, two panels with a draggable gutter, status line, F-bar.
- *  Tabs and the files view land in the next M1 steps. */
+/** The shell: top line, two tabbed panels with a draggable gutter, status line,
+ *  and a context-relative F-bar. The files view lands in the next M1 step. */
 
 export function App(): JSX.Element {
   const [state, dispatch] = useReducer(
@@ -52,25 +52,15 @@ export function App(): JSX.Element {
     if (state.sessionId) conn.current?.send({ type: "session.cancel", sessionId: state.sessionId });
   }, [state.sessionId]);
 
-  // Esc cancels the loop from anywhere in the app (§11).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape" && state.status === "running") {
-        e.preventDefault();
-        cancel();
-      }
-      if (e.key === "F10") {
-        e.preventDefault();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [state.status, cancel]);
-
   const running = state.status === "running";
   const colsRef = useRef<HTMLDivElement>(null);
   const layout = usePanelLayout({});
   const drag = useGutterDrag(colsRef, layout.setGutter);
+
+  // Each panel is a tabbed view host (§10). The chat tab is always there to start.
+  const left = usePanelTabs([{ id: "chat", view: "chat", title: "chat", dirty: false }], "chat");
+  const right = usePanelTabs([]);
+  const focused = layout.focus === "left" ? left : right;
 
   // Global keys (§11): Tab swaps focus, ⌃←/→ resizes, ⌃B collapses, Esc cancels.
   useEffect(() => {
@@ -82,8 +72,9 @@ export function App(): JSX.Element {
         cancel();
         return;
       }
-      // Tab swaps panels, but must still indent inside the prompt.
-      if (e.key === "Tab" && !typing) {
+      // Tab swaps panels, but must still indent inside the prompt — and must not
+      // swallow ⌃⇥, which cycles tabs within the focused panel.
+      if (e.key === "Tab" && !typing && !e.ctrlKey) {
         e.preventDefault();
         layout.swapFocus();
         return;
@@ -103,11 +94,28 @@ export function App(): JSX.Element {
         layout.toggleCollapse();
         return;
       }
+      // Tab host keys (§11): ⌃T new, ⌃W close, ⌃⇥ cycle.
+      if (e.ctrlKey && (e.key === "t" || e.key === "T")) {
+        e.preventDefault();
+        // Until the picker exists, a new tab is a files view on the repo root.
+        focused.open({ view: "files", title: "files", path: "." });
+        return;
+      }
+      if (e.ctrlKey && e.key === "Tab") {
+        e.preventDefault();
+        focused.cycle(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (e.ctrlKey && (e.key === "w" || e.key === "W")) {
+        e.preventDefault();
+        if (focused.activeId) focused.close(focused.activeId);
+        return;
+      }
       if (e.key === "F10") e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state.status, cancel, layout]);
+  }, [state.status, cancel, layout, focused]);
 
   const colsClass = [
     "cols",
@@ -115,48 +123,68 @@ export function App(): JSX.Element {
     layout.collapsed === "right" ? "collapsed-right" : "",
   ].filter(Boolean).join(" ");
 
-  const chat = (
-    <>
-      <div className="t">chat{sessionName(state) ? ` · ${sessionName(state)}` : ""}</div>
-      <div className="tr">
-        {running ? <span className="amber">running</span>
-          : `${state.sessions.length} session${state.sessions.length === 1 ? "" : "s"}`}
-      </div>
-      <Chat rows={state.rows} running={running} />
-      <Prompt onSend={send} running={running} queued={state.queued} focused={layout.focus === "left"} />
-    </>
-  );
+  const renderView = (tab: Tab | undefined, side: PanelSide): JSX.Element => {
+    switch (tab?.view) {
+      case "chat":
+        return (
+          <>
+            <Chat rows={state.rows} running={running} />
+            <Prompt onSend={send} running={running} queued={state.queued} focused={layout.focus === side} />
+          </>
+        );
+      default:
+        return <div className="body empty">files view · M1 step 3</div>;
+    }
+  };
+
+  const panelExtra = (tab: Tab | undefined): React.ReactNode => {
+    if (tab?.view !== "chat") return null;
+    return running
+      ? <span className="amber">running</span>
+      : `${state.sessions.length} session${state.sessions.length === 1 ? "" : "s"}`;
+  };
 
   return (
     <div className="screen" style={{ ["--gutter" as string]: String(layout.gutter) }}>
       <TopLine state={state} />
       <div className={colsClass} ref={colsRef}>
-        <Panel side="left" focus={layout.focus} collapsed={layout.collapsed} onFocus={layout.setFocus}>
-          {chat}
+        <Panel
+          side="left" focus={layout.focus} collapsed={layout.collapsed}
+          onFocus={layout.setFocus} tabs={left}
+          titleSuffix={left.active?.view === "chat" ? sessionName(state) : undefined}
+          extra={panelExtra(left.active)}
+        >
+          {renderView(left.active, "left")}
         </Panel>
         <div
           className={drag.dragging ? "gutter dragging" : "gutter"}
           onPointerDown={drag.onPointerDown}
           title="drag, or ⌃← / ⌃→"
         />
-        <Panel side="right" focus={layout.focus} collapsed={layout.collapsed} onFocus={layout.setFocus}>
-          <div className="t">panel</div>
-          <div className="body dim empty">files view · M1 step 3</div>
+        <Panel
+          side="right" focus={layout.focus} collapsed={layout.collapsed}
+          onFocus={layout.setFocus} tabs={right}
+          extra={panelExtra(right.active)}
+        >
+          {renderView(right.active, "right")}
         </Panel>
       </div>
       <StatusLine state={state} layout={layout} />
-      <FKeys focus={layout.focus} />
+      <FKeys keys={keysFor(focused.active?.view)} />
     </div>
   );
 }
 
 function Panel({
-  side, focus, collapsed, onFocus, children,
+  side, focus, collapsed, onFocus, tabs, titleSuffix, extra, children,
 }: {
   side: PanelSide;
   focus: PanelSide;
   collapsed: PanelSide | null;
   onFocus: (s: PanelSide) => void;
+  tabs: PanelTabs;
+  titleSuffix?: string;
+  extra?: React.ReactNode;
   children: React.ReactNode;
 }): JSX.Element {
   const cls = [
@@ -164,8 +192,33 @@ function Panel({
     focus === side ? "focus" : "",
     collapsed === side ? "hidden" : "",
   ].filter(Boolean).join(" ");
+
+  const title = tabs.active
+    ? `${tabs.active.title}${titleSuffix ? ` · ${titleSuffix}` : ""}`
+    : "panel";
+
   return (
     <div className={cls} onMouseDown={() => onFocus(side)}>
+      <div className="t">{title}</div>
+      {extra !== null && extra !== undefined && <div className="tr">{extra}</div>}
+      {tabs.tabs.length > 1 && (
+        <div className="tabs">
+          {tabs.tabs.map((t) => (
+            <span
+              key={t.id}
+              className={t.id === tabs.activeId ? "tab on" : "tab"}
+              onMouseDown={(e) => { e.stopPropagation(); onFocus(side); tabs.select(t.id); }}
+            >
+              {t.title}{t.dirty ? " ●" : ""}
+              <i
+                className="x"
+                title="close"
+                onMouseDown={(e) => { e.stopPropagation(); tabs.close(t.id); }}
+              >×</i>
+            </span>
+          ))}
+        </div>
+      )}
       {children}
     </div>
   );
@@ -341,36 +394,7 @@ function StatusLine({
   );
 }
 
-/** §11: the F-bar is context-relative — it shows what the keys do *here*.
- *  `live` marks a key that is actually wired; the rest are dim until their step lands. */
-const CHAT_KEYS: [string, string, boolean][] = [
-  ["F1", "help", false],
-  ["F2", "+ attach", false],
-  ["F3", "sessions", false],
-  ["F4", "system", false],
-  ["F5", "options", false],
-  ["F6", "compact", false],
-  ["F7", "rewind", false],
-  ["F8", "clear", false],
-  ["F9", "open ▸", false],
-  ["F10", "quit", false],
-];
-
-const FILES_KEYS: [string, string, boolean][] = [
-  ["F1", "help", false],
-  ["F2", "menu", false],
-  ["F3", "view", false],
-  ["F4", "edit", false],
-  ["F5", "copy", false],
-  ["F6", "move", false],
-  ["F7", "mkdir", false],
-  ["F8", "delete", false],
-  ["F9", "upload", false],
-  ["F10", "quit", false],
-];
-
-function FKeys({ focus }: { focus: PanelSide }): JSX.Element {
-  const keys = focus === "left" ? CHAT_KEYS : FILES_KEYS;
+function FKeys({ keys }: { keys: FKeySet }): JSX.Element {
   return (
     <div className="fkeys">
       {keys.map(([key, label, live]) => (

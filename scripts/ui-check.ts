@@ -204,6 +204,23 @@ export async function assertGutterAt(page: Page, expected: number, tolerance = 0
   );
 }
 
+/** §11: the F-bar always shows what the keys do *here*. */
+export async function assertFBar(page: Page, expectLabel?: string): Promise<void> {
+  const bar = await page.eval<{ keys: string[]; labels: string[] }>(`(() => {
+    const spans = [...document.querySelectorAll('.fkeys > span')];
+    return {
+      keys: spans.map(s => s.querySelector('b')?.textContent ?? ''),
+      labels: spans.map(s => (s.textContent ?? '').replace(/^F\\d+/, '').trim()),
+    };
+  })()`);
+  check("F-bar has F1 through F10", bar.keys.join(",") === "F1,F2,F3,F4,F5,F6,F7,F8,F9,F10", bar.keys);
+  check("F1 is help and F10 is quit",
+    bar.labels[0] === "help" && bar.labels[9] === "quit", [bar.labels[0], bar.labels[9]]);
+  if (expectLabel !== undefined) {
+    check(`F-bar is context-relative (shows "${expectLabel}")`, bar.labels.includes(expectLabel), bar.labels);
+  }
+}
+
 /* ------------------------------------------------------------------ */
 
 async function main(): Promise<void> {
@@ -236,6 +253,48 @@ async function main(): Promise<void> {
     await assertGutterAt(page, 0.5);
     // Still no overflow after resizing.
     await assertNoOverflow(page);
+
+    group("F-bar");
+    // Chat is focused on the left, so the bar must show session keys.
+    await assertFBar(page, "sessions");
+
+    group("tabs");
+    const tabState = async () => page.eval<{ strip: number; title: string; bar: string }>(`(() => {
+      const blk = document.querySelector('.cols > .blk');
+      return {
+        strip: blk.querySelectorAll('.tab').length,
+        title: blk.querySelector('.t')?.textContent ?? '',
+        bar: [...document.querySelectorAll('.fkeys > span')].map(s => s.textContent).join(' '),
+      };
+    })()`);
+
+    const start = await tabState();
+    check("a lone tab hides the strip", start.strip === 0, start);
+
+    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',ctrlKey:true,bubbles:true}))`);
+    await sleep(250);
+    const opened = await tabState();
+    check("⌃T opens a tab and shows the strip", opened.strip === 2, opened);
+    check("the new tab takes the panel title", opened.title.startsWith("files"), opened.title);
+    check("the F-bar follows the focused view", opened.bar.includes("mkdir"), opened.bar);
+    await assertTitlesNotClipped(page);
+    await assertNoOverflow(page);
+
+    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',ctrlKey:true,bubbles:true}))`);
+    await sleep(250);
+    const cycled = await tabState();
+    check("⌃⇥ cycles back to chat", cycled.title.startsWith("chat"), cycled.title);
+    check("the F-bar switches back to chat keys", cycled.bar.includes("sessions"), cycled.bar);
+
+    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',ctrlKey:true,bubbles:true}))`);
+    await sleep(200);
+    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'w',ctrlKey:true,bubbles:true}))`);
+    await sleep(250);
+    const closed = await tabState();
+    check("⌃W closes the tab and the strip hides again", closed.strip === 0, closed);
+    check("the shell is still usable after closing a tab",
+      closed.title.startsWith("chat") && (await page.eval<boolean>("!!document.querySelector('.prompt')")),
+      closed);
 
     group("focus");
     const before = await page.eval<string>("document.querySelector('.cols > .blk.focus')?.className ?? ''");

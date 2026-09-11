@@ -96,6 +96,29 @@ html, body, #root {
   background: var(--bg); padding: 0 5px; color: var(--dim); font-size: 11px;
 }
 
+/* Tab strip — the v0 mockup's .tabs, inside a ratatui block. */
+.tabs {
+  display: flex;
+  gap: 2px;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--line);
+  margin: -4px -8px 6px;
+  padding: 0 6px;
+  flex: none;
+}
+.tab {
+  padding: 2px 8px;
+  color: var(--dim);
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 4px 4px 0 0;
+  cursor: default;
+  white-space: nowrap;
+}
+.tab.on { color: var(--hi); background: var(--bg); border-color: var(--line); }
+.tab .x { font-style: normal; margin-left: 6px; color: var(--dim); cursor: pointer; }
+.tab .x:hover { color: var(--red); }
+
 .body { overflow-y: auto; flex: 1; min-height: 0; }
 .body.empty { display: grid; place-items: center; color: var(--dim); }
 .body.wrap { white-space: normal; }
