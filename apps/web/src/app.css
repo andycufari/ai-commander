@@ -227,6 +227,28 @@ html, body, #root {
 .pick-row.sel .pick-detail { color: var(--hi); }
 .pick-empty { color: var(--dim); padding: 4px; }
 
+/* options — the v2 form (§10) */
+.options { width: 760px; display: flex; flex-direction: column; gap: 4px; }
+.opt-scopes { display: flex; gap: 10px; margin-bottom: 2px; }
+.opt-scope { color: var(--dim); cursor: pointer; }
+.opt-scope.on { color: var(--hi); }
+.opt-list { max-height: 60vh; overflow-y: auto; }
+.opt-section { color: var(--amber); margin-top: 8px; }
+.opt-row {
+  display: grid;
+  grid-template-columns: minmax(0, 15em) minmax(0, 16em) minmax(0, 5em) minmax(0, 1fr);
+  gap: 8px; padding: 1px 4px; white-space: nowrap;
+}
+.opt-row.sel { background: var(--sel); }
+.opt-row.ro .opt-label, .opt-row.ro .opt-value { color: var(--dim); }
+.opt-label { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.opt-row.sel .opt-label { color: var(--hi); }
+.opt-value { color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+.opt-value .on { color: var(--hi); margin-right: 6px; }
+.opt-value .off { color: var(--dim); margin-right: 6px; }
+.opt-origin { color: var(--dim); }
+.opt-hint { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+
 /* session navigator (§10) */
 .navigator { width: 640px; display: flex; flex-direction: column; gap: 6px; }
 .nav-list { max-height: 50vh; overflow-y: auto; }

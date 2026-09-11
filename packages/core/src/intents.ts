@@ -4,11 +4,12 @@ import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 
 import { promisify } from "node:util";
 import { basename } from "node:path";
 import {
-  type Config, type Event, type FsEntry, type Intent, type Rules, type Workspace,
+  type Config, type Event, type FsEntry, type Intent, type PartialConfig,
+  type Rules, type Workspace,
   DEFAULT_WORKSPACE, Workspace as WorkspaceSchema,
 } from "@aicommander/protocol";
 import { homedir } from "node:os";
-import { globalDir, projectDir } from "./config.js";
+import { globalDir, loadConfig, projectDir } from "./config.js";
 
 /** ~/.aicommander/recents.json — repos opened before (§4). */
 async function readRecents(): Promise<string[]> {
@@ -31,10 +32,25 @@ import { join } from "node:path";
 
 const run = promisify(execFile);
 
+/** Deep-merge an options patch over what a scope already holds. */
+function mergeOptions(base: unknown, patch: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...(base as Record<string, unknown> ?? {}) };
+  for (const [key, value] of Object.entries((patch ?? {}) as Record<string, unknown>)) {
+    if (value === undefined) continue;
+    out[key] = value && typeof value === "object" && !Array.isArray(value)
+      ? mergeOptions(out[key], value)
+      : value;
+  }
+  return out;
+}
+
 export interface Ctx {
   root: string;
+  /** Mutable: options.set re-reads every layer and swaps these in. */
   config: Config;
   rules: Rules;
+  /** The --brain override, so a reload does not lose it. */
+  brainOverride?: PartialConfig;
   sessions: SessionStore;
   loop: Loop;
   workspace: WorkspaceStore;
@@ -265,8 +281,36 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
       return;
     }
 
-    case "options.set":
-      throw new Error("options.set arrives with the options modal (M2)");
+    case "options.set": {
+      // Session scope lives in meta.json.options; project and global are config files.
+      // The merged result is broadcast so every client agrees on what is in force.
+      if (intent.scope === "session") {
+        if (!intent.sessionId) throw new Error("session scope needs a sessionId");
+        const meta = await ctx.sessions.readMeta(intent.sessionId);
+        await ctx.sessions.writeMeta({
+          ...meta,
+          options: mergeOptions(meta.options, intent.patch),
+        });
+      } else {
+        const dir = intent.scope === "global" ? globalDir() : projectDir(ctx.root);
+        await mkdir(dir, { recursive: true });
+        const file = join(dir, "config.json");
+        const existing = await readFile(file, "utf8").then(
+          (raw) => JSON.parse(raw) as Record<string, unknown>,
+          () => ({}),
+        );
+        await writeFile(file, `${JSON.stringify(mergeOptions(existing, intent.patch), null, 2)}\n`);
+      }
+
+      // Re-read every layer so the answer reflects the same merge the loop will use.
+      const reloaded = await loadConfig(ctx.root, ctx.brainOverride);
+      ctx.config = reloaded.config;
+      ctx.rules = reloaded.rules;
+      ctx.loop.setConfig(reloaded.config, reloaded.rules);
+      ctx.broadcast(ev("config", { config: reloaded.config, root: ctx.root }));
+      ctx.broadcast(ev("toast", { level: "info", text: `saved to ${intent.scope}` }));
+      return;
+    }
 
     case "job.kill": {
       if (!ctx.loop.jobs.kill(intent.jobId)) {

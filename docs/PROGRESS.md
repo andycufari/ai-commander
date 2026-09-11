@@ -83,14 +83,14 @@ First-use feedback moved several things forward:
 ## M2 — Loop hardening
 
 - [x] Guards 1–4, 7 (§6) — repeat, consecutive-error, output cap, timeout→job, malformed calls
-- [ ] Guards 5–6 (steer at tool boundary, snapshots)
+- [x] Guards 5–6 (steer at tool boundary, snapshots)
 - [~] Background jobs (registry done) + log view
 - [x] Permission engine + rules.json + danger/warning/info modals (v2 contract)
 - [x] Modes ask / auto / plan
-- [ ] Options modal (session/project/global)
+- [x] Options modal (session/project/global)
 - [x] Snapshots + session navigator (fork/truncate/drop group/drop outputs)
-- [ ] Compact (manual + auto), clear, queue/steer
-- [~] Modal system: info/warning/danger + input/pick + toasts (progress pending)
+- [x] Compact (manual + auto nudge), clear, queue/steer
+- [~] Modal system: info/warning/danger + input/pick/form + toasts (progress bar pending)
 
 **Demo:** `rm -rf` blocked in auto mode; `npm run dev` becomes a job; repeat grep ×3 pauses;
 rewind restores a deleted file; queued message lands at next tool boundary.

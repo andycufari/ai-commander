@@ -14,9 +14,33 @@ import { Pick, defaultFilter, type PickItem } from "./Pick.js";
 import { Modal, type ModalButton } from "./Modal.js";
 import { LogView, jobStatus } from "./LogView.js";
 import { Navigator, type NavAction } from "./Navigator.js";
+import { Options } from "./Options.js";
 import { modalOpen, unlessModal, useModalLock } from "./modal-stack.js";
 import { toPatch, toRuntimeTabs } from "./restore.js";
 import type { Attachment } from "@aicommander/protocol";
+
+/**
+ * Turn a dotted option key and its displayed value into the nested patch the protocol
+ * expects. Values arrive as strings from the form, so each one is parsed back to the
+ * type its schema wants — a string "3" would fail validation and silently do nothing.
+ */
+function patchFor(key: string, value: string): Record<string, unknown> {
+  const parse = (): unknown => {
+    if (value === "on") return true;
+    if (value === "off") return false;
+    if (/^\d+(\.\d+)?$/.test(value)) return Number(value);
+    return value;
+  };
+  const parts = key.split(".");
+  const patch: Record<string, unknown> = {};
+  let node = patch;
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    node[parts[i]!] = {};
+    node = node[parts[i]!] as Record<string, unknown>;
+  }
+  node[parts[parts.length - 1]!] = parse();
+  return patch;
+}
 
 /** The input shape of a modal (v2 "the other three shapes"): one field, ⏎ submits. */
 function AskInput({
@@ -340,6 +364,7 @@ export function App(): JSX.Element {
   const [killJob, setKillJob] = useState<string | undefined>();
   /** Groups whose truncate is waiting on a warning modal. */
   const [confirmTruncate, setConfirmTruncate] = useState<string | undefined>();
+  const [optionsScope, setOptionsScope] = useState<"session" | "project" | "global">("project");
   const [compactPlan, setCompactPlan] = useState<
     { groups: number; before: number; after: number; files: string[] } | undefined
   >();
@@ -913,24 +938,18 @@ export function App(): JSX.Element {
           onClose={() => setPick(null)}
         />
       )}
-      {pick === "settings" && (
-        <Pick
-          title="settings"
-          placeholder="filter"
-          hint="⏎ choose · Esc close"
-          items={[
-            {
-              id: "brain",
-              label: `brain · ${state.config?.brain.model ?? "?"}`,
-              detail: state.config ? hostOf(state.config.brain.endpoint) : "",
-              group: "model",
-            },
-            { id: "mode", label: `mode · ${state.config?.mode ?? "ask"}`, detail: "ask / auto / plan", group: "loop" },
-            { id: "ctx", label: `context · ${fmtK(state.ctxMax)}`, detail: "from the endpoint", group: "loop" },
-          ]}
-          onChoose={() => {
-            toast("info", "editing settings arrives with the options modal (M2)");
-            setPick(null);
+            {pick === "settings" && state.config && (
+        <Options
+          config={state.config}
+          scope={optionsScope}
+          onScope={setOptionsScope}
+          onChange={(key, value) => {
+            conn.current?.send({
+              type: "options.set",
+              scope: optionsScope,
+              ...(optionsScope === "session" && state.sessionId ? { sessionId: state.sessionId } : {}),
+              patch: patchFor(key, value),
+            });
           }}
           onClose={() => setPick(null)}
         />

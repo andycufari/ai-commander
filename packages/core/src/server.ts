@@ -73,7 +73,10 @@ export async function serve(opts: ServeOptions): Promise<Serving> {
 
   const loop = new Loop({ root, config, rules, sessions, emit: broadcast });
   const workspace = new WorkspaceStore(root);
-  const ctx: Ctx = { root, config, rules, sessions, loop, workspace, broadcast, send: broadcast };
+  const ctx: Ctx = {
+    root, config, rules, sessions, loop, workspace,
+    brainOverride: override, broadcast, send: broadcast,
+  };
 
   const watcher = watchRepo(root, broadcast, () => randomUUID());
 
@@ -101,7 +104,9 @@ export async function serve(opts: ServeOptions): Promise<Serving> {
           return;
         }
         try {
-          await handleIntent(parsed, { ...ctx, send });
+          // Spread would copy config by value, so options.set could not swap it; the
+          // per-client `send` is layered on with a prototype instead.
+          await handleIntent(parsed, Object.create(ctx, { send: { value: send } }) as Ctx);
         } catch (err) {
           send({
             id: randomUUID(),

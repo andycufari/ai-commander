@@ -35,6 +35,7 @@ export interface ShowResult {
 
 export interface LoopDeps {
   root: string;
+  /** Mutable: options.set swaps these without rebuilding the loop. */
   config: Config;
   rules: Rules;
   sessions: SessionStore;
@@ -84,6 +85,12 @@ export class Loop {
 
   constructor(private readonly deps: LoopDeps) {
     this.jobs = new JobRegistry(deps.emit);
+  }
+
+  /** options.set re-reads the config; the loop picks up the new values on its next turn. */
+  setConfig(config: Config, rules: Rules): void {
+    this.deps.config = config;
+    this.deps.rules = rules;
   }
 
   isRunning(sessionId: string): boolean {
