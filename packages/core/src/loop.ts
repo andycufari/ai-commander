@@ -5,6 +5,8 @@ import {
   ToolArgs, type Config, type Event, type LogEntry, type Rules, type ToolResult,
 } from "@aicommander/protocol";
 import { check } from "./permissions.js";
+import { ErrorGuard, RepeatGuard } from "./guards.js";
+import { JobRegistry } from "./jobs.js";
 import { resolveInRoot } from "./paths.js";
 import { BrainClient, BrainError, type BrainMessage, type ToolSpec } from "./brain.js";
 import { projectDir } from "./config.js";
@@ -15,8 +17,8 @@ import { SessionStore } from "./sessions.js";
  *  guards 1-6 and permissions land in M2. */
 
 const CORE_ENABLED = [
-  "read_file", "write_file", "edit_file", "glob", "grep", "shell", "git",
-  "show_files", "list_skills", "read_skill",
+  "read_file", "write_file", "edit_file", "glob", "grep", "shell", "job", "git",
+  "show_files", "ask_user", "list_skills", "read_skill",
 ] as const;
 
 /** What the UI reports back about one path of a show_files request. */
@@ -48,6 +50,10 @@ interface Running {
   queued: string[];
   /** Rules the user answered "allow for this session" on (§8). */
   allowedRules: Set<string>;
+  /** Guard 1: identical calls in a row. */
+  repeat: RepeatGuard;
+  /** Guard 2: failures in a row. */
+  errors: ErrorGuard;
 }
 
 /** The user's answer to a permission ask. */
@@ -63,10 +69,16 @@ export class Loop {
   private readonly permissionWaits = new Map<string, (a: PermissionReply) => void>();
   /** "Allow for this session" survives between turns of the same session. */
   private readonly sessionAllowances = new Map<string, Set<string>>();
+  /** ask_user and guard pauses waiting for an answer. */
+  private readonly askWaits = new Map<string, (choice: string) => void>();
+  /** Guard 4: background jobs, keyed by id. Shared across sessions. */
+  readonly jobs: JobRegistry;
   /** show_files calls waiting for the UI to report what it did with each path. */
   private readonly showWaits = new Map<string, (r: ShowResult[]) => void>();
 
-  constructor(private readonly deps: LoopDeps) {}
+  constructor(private readonly deps: LoopDeps) {
+    this.jobs = new JobRegistry(deps.emit);
+  }
 
   isRunning(sessionId: string): boolean {
     return this.running.has(sessionId);
@@ -78,6 +90,42 @@ export class Loop {
     if (!run) return false;
     run.controller.abort();
     return true;
+  }
+
+  /** The user answering ask_user, or a guard pause (§6). */
+  resolveAsk(requestId: string, choice: string): boolean {
+    const waiter = this.askWaits.get(requestId);
+    if (!waiter) return false;
+    this.askWaits.delete(requestId);
+    waiter(choice);
+    return true;
+  }
+
+  /**
+   * Put a question to the user and wait. This is `ask_user` (§5) and also how guards 1
+   * and 2 pause — a stuck loop and a model that wants a decision are the same event as
+   * far as the user is concerned, so they use the same modal.
+   */
+  private async ask(
+    sessionId: string,
+    question: string,
+    options: string[],
+    signal: AbortSignal,
+  ): Promise<string> {
+    const requestId = randomUUID().slice(0, 8);
+    return new Promise<string>((resolve) => {
+      const onAbort = (): void => {
+        this.askWaits.delete(requestId);
+        // Cancelling a pause means stop, which is the conservative reading.
+        resolve(options[options.length - 1] ?? "stop");
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      this.askWaits.set(requestId, (choice) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(choice);
+      });
+      this.deps.emit(ev("ask.request", { requestId, sessionId, question, options }));
+    });
   }
 
   /** The user answering a permission ask (§8). */
@@ -247,6 +295,28 @@ export class Loop {
     };
   }
 
+  /** §5 ask_user: the model asks, the loop pauses, the answer comes back as a result. */
+  private async askUser(
+    sessionId: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<ToolResult> {
+    const parsed = ToolArgs.ask_user.safeParse(args);
+    if (!parsed.success) {
+      return {
+        ok: false, summary: "bad arguments", truncated: false,
+        content: "ask_user takes { question: string, options: string[] }.",
+      };
+    }
+    const choice = await this.ask(sessionId, parsed.data.question, parsed.data.options, signal);
+    return {
+      ok: true,
+      summary: `answered: ${choice}`,
+      content: `The user chose: ${choice}`,
+      truncated: false,
+    };
+  }
+
   /** A message sent while the loop runs is queued, not dropped (§6 guard 5). */
   queue(sessionId: string, text: string): boolean {
     const run = this.running.get(sessionId);
@@ -269,6 +339,9 @@ export class Loop {
       controller, startedAt: Date.now(), toolCount: 0, queued: [],
       // Session allowances persist across turns within one session.
       allowedRules: this.sessionAllowances.get(sessionId) ?? new Set(),
+      // Guard counters are per group: a new user turn is a fresh start.
+      repeat: new RepeatGuard(config.loop.repeatGuard),
+      errors: new ErrorGuard(config.loop.errorGuard),
     };
     this.sessionAllowances.set(sessionId, run.allowedRules);
     this.running.set(sessionId, run);
@@ -325,6 +398,26 @@ export class Loop {
             cancelled = true;
             break;
           }
+
+          // Guard 1: the same call, over and over, is not progress.
+          if (run.repeat.record(call.name, call.args)) {
+            const choice = await this.ask(
+              sessionId,
+              `${call.name} has been called ${run.repeat.repeats} times with the same arguments. ` +
+                `The loop may be stuck.`,
+              ["continue", "stop", "tell it something"],
+              controller.signal,
+            );
+            run.repeat.forgive();
+            if (choice === "stop") { cancelled = true; break; }
+            if (choice.startsWith("tell")) {
+              const note = await this.ask(
+                sessionId, "What should it do instead?", ["__input"], controller.signal,
+              );
+              messages.push({ role: "user", content: note });
+              break;
+            }
+          }
           if (run.toolCount >= config.loop.maxToolCallsPerTurn) {
             messages.push(toolMessage(call.callId, call.name,
               `Stopped: this turn hit the ${config.loop.maxToolCallsPerTurn} tool call limit.`));
@@ -356,12 +449,17 @@ export class Loop {
             signal: controller.signal,
             onOutput: (delta) => emit(ev("tool.output", { callId: call.callId, delta })),
             outPath: (id) => join(projectDir(root), "out", `${id}.txt`),
+            // Guard 4: a timed-out shell becomes a job rather than a corpse.
+            adopt: (child, cmd, existing) => this.jobs.adopt(child, cmd, sessionId, existing),
+            jobs: this.jobs,
           };
 
           const res: ToolResult =
             call.name === "show_files"
               ? await this.showFiles(args, controller.signal)
-              : await runTool(call.name, args, ctx);
+              : call.name === "ask_user"
+                ? await this.askUser(sessionId, args, controller.signal)
+                : await runTool(call.name, args, ctx);
 
           emit(ev("tool.end", {
             callId: call.callId,
@@ -377,6 +475,25 @@ export class Loop {
           });
           messages.push(toolMessage(call.callId, call.name, res.content));
           this.state(sessionId, "running", run);
+
+          // Guard 2: a run of failures means the model is not learning from them.
+          if (run.errors.record(res.ok)) {
+            const choice = await this.ask(
+              sessionId,
+              `${run.errors.errors} tool calls in a row have failed. The loop may be stuck.`,
+              ["continue", "stop", "tell it something"],
+              controller.signal,
+            );
+            run.errors.forgive();
+            if (choice === "stop") { cancelled = true; break; }
+            if (choice.startsWith("tell")) {
+              const note = await this.ask(
+                sessionId, "What should it do instead?", ["__input"], controller.signal,
+              );
+              messages.push({ role: "user", content: note });
+              break;
+            }
+          }
         }
 
         if (cancelled || controller.signal.aborted) {

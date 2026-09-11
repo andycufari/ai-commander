@@ -13,6 +13,7 @@ import { commanderTheme } from "./cm-theme.js";
 import { renderMarkdown } from "./markdown.js";
 import { extensionOf } from "./viewers.js";
 import type { Connection } from "./ws.js";
+import { modalOpen, unlessModal } from "./modal-stack.js";
 
 /**
  * §10 editor — CodeMirror 6, minimal extensions. No autocomplete: this is a harness
@@ -160,12 +161,15 @@ export function Editor({
       if (isMarkdown) cb.current.onModeChange("view");
       return true;
     };
+    // CodeMirror has its own key pipeline, so the modal rule is applied to each
+    // binding rather than to a React handler.
+    const guard = (run: () => boolean) => (): boolean => (modalOpen() ? true : run());
     const saveKey = keymap.of([
-      { key: "Mod-s", preventDefault: true, run: () => save() },
-      { key: "Ctrl-s", preventDefault: true, run: () => save() },
-      { key: "Mod-e", preventDefault: true, run: toggleMode },
-      { key: "Ctrl-e", preventDefault: true, run: toggleMode },
-      { key: "Escape", preventDefault: true, run: () => { cb.current.onEscape(); return true; } },
+      { key: "Mod-s", preventDefault: true, run: guard(() => save()) },
+      { key: "Ctrl-s", preventDefault: true, run: guard(() => save()) },
+      { key: "Mod-e", preventDefault: true, run: guard(toggleMode) },
+      { key: "Ctrl-e", preventDefault: true, run: guard(toggleMode) },
+      { key: "Escape", preventDefault: true, run: guard(() => { cb.current.onEscape(); return true; }) },
     ]);
 
     const state = EditorState.create({
@@ -212,7 +216,7 @@ export function Editor({
   }, [focused, loaded, mode]);
 
   // In preview mode the keys live on the container, since there is no CodeMirror.
-  const onPreviewKey = (e: React.KeyboardEvent): void => {
+  const onPreviewKey = unlessModal((e: React.KeyboardEvent): void => {
     if ((e.ctrlKey || e.metaKey) && (e.key === "e" || e.key === "E")) {
       e.preventDefault();
       cb.current.onModeChange("edit");
@@ -220,7 +224,7 @@ export function Editor({
       e.preventDefault();
       cb.current.onEscape();
     }
-  };
+  });
 
   const html = useMemo(
     () => (isMarkdown && mode === "view" && loaded !== undefined ? renderMarkdown(loaded) : ""),

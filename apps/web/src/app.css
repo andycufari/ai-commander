@@ -191,6 +191,8 @@ html, body, #root {
   width: 100%; margin-top: 8px; background: var(--bg); color: var(--ink);
   border: 1px solid var(--red); font: inherit; padding: 4px 6px; outline: none; resize: vertical;
 }
+.modal-edit.info { border-color: var(--line); }
+.modal-edit.info:focus { border-color: var(--line-hi); }
 
 /* the command a rule matched, shown as the user would type it */
 .modal-command {

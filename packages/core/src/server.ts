@@ -124,6 +124,8 @@ export async function serve(opts: ServeOptions): Promise<Serving> {
     config,
     rules,
     close: async () => {
+      // v1: jobs are children of this process and do not outlive it (§6 guard 4).
+      loop.jobs.killAll();
       await watcher.close();
       // Write the layout before the process goes away, rather than losing up to one
       // debounce window of it.

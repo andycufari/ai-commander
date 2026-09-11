@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useModalLock } from "./modal-stack.js";
 
 /**
  * The three modal tiers from v2 §1.
@@ -37,6 +38,8 @@ export interface ModalProps {
 }
 
 export function Modal({ tier, title, children, buttons, onChoose, editable }: ModalProps): JSX.Element {
+  // While this is up, nothing else takes keys.
+  useModalLock();
   const ref = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState<string | undefined>();
   const editRef = useRef<HTMLTextAreaElement>(null);

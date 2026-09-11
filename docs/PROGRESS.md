@@ -82,8 +82,9 @@ First-use feedback moved several things forward:
 
 ## M2 — Loop hardening
 
-- [ ] Guards 1–7 (§6)
-- [ ] Background jobs + log view
+- [x] Guards 1–4, 7 (§6) — repeat, consecutive-error, output cap, timeout→job, malformed calls
+- [ ] Guards 5–6 (steer at tool boundary, snapshots)
+- [~] Background jobs (registry done) + log view
 - [x] Permission engine + rules.json + danger/warning/info modals (v2 contract)
 - [x] Modes ask / auto / plan
 - [ ] Options modal (session/project/global)

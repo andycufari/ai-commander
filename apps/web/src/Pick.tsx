@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useModalLock } from "./modal-stack.js";
 
 /**
  * The pick modal — v2's info tier with a filterable list.
@@ -73,6 +74,7 @@ export function defaultFilter(items: readonly PickItem[], query: string): PickIt
 export function Pick({
   title, items, placeholder, hint, onChoose, onClose, filter, header,
 }: PickProps): JSX.Element {
+  useModalLock();
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);

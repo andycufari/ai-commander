@@ -6,6 +6,7 @@ import {
   type Row,
 } from "./files.js";
 import { fileAttachment } from "./chips.js";
+import { unlessModal } from "./modal-stack.js";
 
 /**
  * §10 files view — NC list with name, size, date.
@@ -162,7 +163,7 @@ export function FilesView({
     setMarked(new Set());
   }, [marked, currentEntry, onMention]);
 
-  const onKeyDown = (e: React.KeyboardEvent): void => {
+  const onKeyDown = unlessModal((e: React.KeyboardEvent): void => {
     switch (e.key) {
       case "ArrowDown": e.preventDefault(); move(1); return;
       case "ArrowUp": e.preventDefault(); move(-1); return;
@@ -186,7 +187,7 @@ export function FilesView({
           setShowHidden((v) => !v);
         }
     }
-  };
+  });
 
   // Keep the cursor row in view as it moves.
   useEffect(() => {

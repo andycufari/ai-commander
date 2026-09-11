@@ -12,8 +12,47 @@ import { addChips, fileAttachment, removeChip, type Chip } from "./chips.js";
 import { linkifyMentions } from "./mentions.js";
 import { Pick, defaultFilter, type PickItem } from "./Pick.js";
 import { Modal, type ModalButton } from "./Modal.js";
+import { modalOpen, unlessModal, useModalLock } from "./modal-stack.js";
 import { toPatch, toRuntimeTabs } from "./restore.js";
 import type { Attachment } from "@aicommander/protocol";
+
+/** The input shape of a modal (v2 "the other three shapes"): one field, ⏎ submits. */
+function AskInput({
+  question, onSubmit,
+}: { question: string; onSubmit: (text: string) => void }): JSX.Element {
+  const [text, setText] = useState("");
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useModalLock();
+  useEffect(() => { ref.current?.focus(); }, []);
+  return (
+    <div className="modal-scrim">
+      <div className="modal info" role="dialog" aria-label={question}>
+        <span className="t">tell it something</span>
+        <div className="modal-body">{question}</div>
+        <textarea
+          ref={ref}
+          className="modal-edit info"
+          rows={2}
+          value={text}
+          spellCheck={false}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              if (text.trim()) onSubmit(text.trim());
+            }
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              onSubmit("continue");
+            }
+          }}
+        />
+        <div className="k">⏎ send · Esc continue anyway</div>
+      </div>
+    </div>
+  );
+}
 
 /**
  * v2 §1: the safe option is always the one Esc maps to, and a danger modal has no
@@ -66,7 +105,7 @@ export function App(): JSX.Element {
     ): UiState => {
       if (e.type === "__conn") return { ...s, connected: e.connected };
       if (e.type === "__echo") return echoUser(s, e.text);
-      if (e.type === "__answered") return { ...s, permission: undefined };
+      if (e.type === "__answered") return { ...s, permission: undefined, ask: undefined };
       return reduce(s, e);
     },
     initialState,
@@ -404,10 +443,10 @@ export function App(): JSX.Element {
   // Global keys (§11). Chords are ⌘-based; see keys.ts for why not F-keys.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      // A modal owns the keyboard while it is up. React's stopPropagation cannot hold
-      // back a native window listener, so the guard lives here: Esc in a permission
-      // ask must deny that one call, not cancel the whole turn.
-      if (document.querySelector(".modal-scrim")) return;
+      // A modal owns the keyboard while it is up (modal-stack.ts). React's
+      // stopPropagation cannot hold back a native window listener, so the rule is
+      // enforced from the shared stack rather than by each handler remembering it.
+      if (modalOpen()) return;
 
       if (e.key === "Escape") {
         if (leaderArmed) { setLeaderArmed(false); return; }
@@ -672,6 +711,36 @@ export function App(): JSX.Element {
             {state.permission.rule.startsWith("ask-") ? "" : ` · rule ${state.permission.rule}`}
           </span>
         </Modal>
+      )}
+      {state.ask && (
+        state.ask.options.length === 1 && state.ask.options[0] === "__input" ? (
+          // "tell it something" — a guard pause asking for free text (§6).
+          <AskInput
+            question={state.ask.question}
+            onSubmit={(text) => {
+              conn.current?.send({ type: "ask.answer", requestId: state.ask!.requestId, choice: text });
+              dispatch({ type: "__answered" });
+            }}
+          />
+        ) : (
+          <Modal
+            tier="info"
+            title="the loop is asking"
+            buttons={state.ask.options.map((o, i) => ({
+              id: o,
+              label: o,
+              letter: o[0] ?? String(i + 1),
+              isDefault: i === 0,
+              isSafe: o === "stop" || i === state.ask!.options.length - 1,
+            }))}
+            onChoose={(id) => {
+              conn.current?.send({ type: "ask.answer", requestId: state.ask!.requestId, choice: id });
+              dispatch({ type: "__answered" });
+            }}
+          >
+            {state.ask.question}
+          </Modal>
+        )
       )}
       {pick === "folders" && (
         <Pick
@@ -1004,7 +1073,7 @@ function Prompt({
     }
   };
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+  const onKeyDown = unlessModal((e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     // Inline completion for @path and /command.
     if (suggestions.length > 0) {
       if (e.key === "ArrowDown") {
@@ -1049,7 +1118,7 @@ function Prompt({
       e.preventDefault();
       onRemoveChip(chips[chips.length - 1]!.key);
     }
-  };
+  });
 
   const footer = queued
     ? "queued · sends at the next tool boundary"

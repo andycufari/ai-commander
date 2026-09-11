@@ -631,6 +631,49 @@ async function main(): Promise<void> {
       { distinct: [...new Set(restoredState.samples)] });
     await assertNoOverflow(page);
 
+    group("modal keyboard rule");
+    // While a modal is up, only the modal takes keys. The regression this guards is
+    // Esc reaching both the modal and the loop, and arrows moving a view behind it.
+    await resetWorkspace(page);
+    await key(page, "Tab");
+    await key(page, "k", { ctrl: true, settle: 250 });
+    await key(page, "t", { settle: 900 });
+    await page.eval(`document.querySelector('.files')?.focus()`);
+    await key(page, "ArrowDown", { settle: 200 });
+    const cursorBeforeModal = await page.eval<string>(
+      `document.querySelector('.files .row.sel .nm')?.textContent?.trim() ?? ''`);
+
+    // Open a pick over it.
+    await key(page, "p", { ctrl: true, settle: 800 });
+    check("a modal is up", await page.eval<boolean>(`!!document.querySelector('.modal')`));
+
+    // Arrows now belong to the modal, not the files view behind it.
+    await key(page, "ArrowDown", { settle: 200 });
+    await key(page, "ArrowDown", { settle: 200 });
+    const cursorDuringModal = await page.eval<string>(
+      `document.querySelector('.files .row.sel .nm')?.textContent?.trim() ?? ''`);
+    check("the view behind a modal does not move", cursorDuringModal === cursorBeforeModal,
+      { before: cursorBeforeModal, during: cursorDuringModal });
+    check("the modal's own cursor did move",
+      await page.eval<number>(`[...document.querySelectorAll('.pick-row')].findIndex(r => r.classList.contains('sel'))`) === 2);
+
+    // Esc closes the modal and nothing else.
+    await key(page, "Escape", { settle: 400 });
+    check("Esc closes the modal", await page.eval<boolean>(`!document.querySelector('.modal')`));
+    check("the view is still there afterwards", await page.eval<boolean>(`!!document.querySelector('.files')`));
+    const cursorAfter = await page.eval<string>(
+      `document.querySelector('.files .row.sel .nm')?.textContent?.trim() ?? ''`);
+    check("the view cursor survived the modal", cursorAfter === cursorBeforeModal,
+      { before: cursorBeforeModal, after: cursorAfter });
+
+    // ⌘P while a modal is up must not stack a second one.
+    await key(page, "p", { ctrl: true, settle: 700 });
+    await key(page, "p", { ctrl: true, settle: 400 });
+    check("a global chord does not open a second modal",
+      await page.eval<number>(`document.querySelectorAll('.modal').length`) === 1,
+      await page.eval<number>(`document.querySelectorAll('.modal').length`));
+    await key(page, "Escape", { settle: 300 });
+
     group("mentions");
     await resetWorkspace(page);
     await page.fill(".prompt textarea", `look at @${mdName} and @nothing here`);

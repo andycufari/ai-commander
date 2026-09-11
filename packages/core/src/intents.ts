@@ -140,10 +140,14 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
       return;
     }
 
+    case "ask.answer": {
+      ctx.loop.resolveAsk(intent.requestId, intent.choice);
+      return;
+    }
+
     case "session.dropGroup":
     case "session.dropToolOutput":
     case "session.compact":
-    case "ask.answer":
       throw new Error(`${intent.type} arrives with the agent loop`);
 
     case "options.set":

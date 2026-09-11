@@ -1,7 +1,9 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { zodToJsonSchema } from "./jsonschema.js";
+import { capText } from "./guards.js";
+import type { JobRegistry } from "./jobs.js";
 import {
   ToolArgs, TOOL_DESCRIPTIONS, type Config, type ToolResult,
 } from "@aicommander/protocol";
@@ -21,6 +23,10 @@ export interface ToolCtx {
   /** Where over-cap output is written: `.aicommander/out/<callId>.txt`. */
   outPath: (callId: string) => string;
   callId: string;
+  /** Guard 4: adopt a timed-out child as a background job, returning its id. */
+  adopt?: (child: ChildProcess, cmd: string, existingOutput: string) => string;
+  /** The job registry, for the `job` tool. */
+  jobs?: JobRegistry;
 }
 
 const ok = (summary: string, content: string): ToolResult =>
@@ -143,6 +149,34 @@ export async function runTool(
       case "shell": {
         const a = ToolArgs.shell.parse(rawArgs);
         return await runShell(a.cmd, a.cwd, a.timeout, ctx);
+      }
+
+      case "job": {
+        const a = ToolArgs.job.parse(rawArgs);
+        if (!ctx.jobs) return fail("no jobs in this context");
+        const job = ctx.jobs.get(a.jobId);
+        if (!job) return fail(`no such job: ${a.jobId}`);
+        switch (a.action) {
+          case "status":
+            return ok(
+              job.running ? `job ${a.jobId} running` : `job ${a.jobId} exit ${job.exitCode}`,
+              job.running
+                ? `Job ${a.jobId} (${job.cmd}) is still running after ` +
+                  `${Math.round((Date.now() - job.startedAt) / 1000)}s.`
+                : `Job ${a.jobId} (${job.cmd}) finished with exit code ${job.exitCode}` +
+                  `${job.killed ? " after being killed" : ""}.`,
+            );
+          case "output": {
+            const tail = ctx.jobs.output(a.jobId) ?? "";
+            return withCap(tail || "(no output yet)", `${tail.split("\n").length} lines`, ctx);
+          }
+          case "kill":
+            return ctx.jobs.kill(a.jobId)
+              ? ok(`killed ${a.jobId}`, `Sent SIGTERM to job ${a.jobId}.`)
+              : fail(`job ${a.jobId} is not running`);
+          default:
+            return fail(`unknown job action`);
+        }
       }
 
       case "git": {
@@ -300,8 +334,10 @@ async function listSkills(root: string): Promise<{ name: string; description: st
 
 /**
  * Guard 4 (§6): on timeout the process is NOT killed — it becomes a background job.
- * The loop passes `onBackground` to adopt it; without one (M0) we report the timeout
- * and kill, since there is no job registry yet.
+ *
+ * Killing `npm run dev` after two minutes would be the wrong answer: it was meant to
+ * keep running. The loop supplies `adopt`, which re-parents the live child into the
+ * job registry and hands back a jobId the model can poll.
  */
 export async function runShell(
   cmd: string,
@@ -334,16 +370,35 @@ export async function runShell(
     child.stderr.on("data", collect);
 
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      void capOutput(out, ctx).then((c) =>
-        finish({
-          ok: false,
-          summary: `timed out after ${limit / 1000}s`,
-          content: `Command timed out after ${limit / 1000}s and was killed.\n\n${c.content}`,
-          outputPath: c.outputPath,
-          truncated: c.truncated,
-        }),
-      );
+      if (!ctx.adopt) {
+        // No registry (a bare tool call in a test): report the timeout and stop.
+        child.kill("SIGKILL");
+        void capOutput(out, ctx).then((c) =>
+          finish({
+            ok: false,
+            summary: `timed out after ${limit / 1000}s`,
+            content: `Command timed out after ${limit / 1000}s.\n\n${c.content}`,
+            outputPath: c.outputPath,
+            truncated: c.truncated,
+          }),
+        );
+        return;
+      }
+      // Detach: the process keeps running, the tool returns a handle to it.
+      child.stdout.off("data", collect);
+      child.stderr.off("data", collect);
+      const jobId = ctx.adopt(child, cmd, out);
+      const tail = out.split("\n").slice(-20).join("\n");
+      finish({
+        ok: true,
+        summary: `still running · job ${jobId}`,
+        content:
+          `The command is still running after ${limit / 1000}s, so it is now background ` +
+          `job ${jobId} — it was not killed. Poll it with job({action:"status",jobId:"${jobId}"}) ` +
+          `or job({action:"output",jobId:"${jobId}"}), and stop it with action "kill".\n\n` +
+          `Output so far:\n${tail}`,
+        truncated: false,
+      });
     }, limit);
 
     const onAbort = (): void => {

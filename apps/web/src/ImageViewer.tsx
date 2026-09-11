@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { unlessModal } from "./modal-stack.js";
 
 /**
  * §10 image viewer — fit to panel by default, `1` for 1:1, drag to pan, scroll to zoom.
@@ -65,7 +66,7 @@ export function ImageViewer({ path, focused, onEscape, revision }: ImageViewerPr
     setPan({ x: 0, y: 0 });
   }, [fitScale]);
 
-  const onKeyDown = (e: React.KeyboardEvent): void => {
+  const onKeyDown = unlessModal((e: React.KeyboardEvent): void => {
     switch (e.key) {
       case "1": e.preventDefault(); zoomTo(1); setPan({ x: 0, y: 0 }); return;
       case "0": case "f": e.preventDefault(); fit(); return;
@@ -74,7 +75,7 @@ export function ImageViewer({ path, focused, onEscape, revision }: ImageViewerPr
       case "Escape": e.preventDefault(); onEscape(); return;
       default: break;
     }
-  };
+  });
 
   const onWheel = (e: React.WheelEvent): void => {
     // The panel does not scroll, so the wheel is free to mean zoom.
