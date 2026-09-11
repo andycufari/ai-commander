@@ -236,6 +236,13 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
     case "options.set":
       throw new Error("options.set arrives with the options modal (M2)");
 
+    case "job.kill": {
+      if (!ctx.loop.jobs.kill(intent.jobId)) {
+        ctx.send(ev("toast", { level: "info", text: "that job is not running" }));
+      }
+      return;
+    }
+
     case "fs.list": {
       const abs = await resolveInRoot(ctx.root, intent.path);
       const dirents = await readdir(abs, { withFileTypes: true });

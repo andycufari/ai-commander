@@ -1,52 +1,22 @@
 {
   "layout": "commander",
-  "gutter": 0.4,
-  "focus": "right",
+  "gutter": 0.5,
+  "focus": "left",
   "collapsed": null,
   "panels": {
     "left": {
       "tabs": [
         {
           "view": "chat"
-        },
-        {
-          "view": "editor",
-          "path": "CLAUDE.md",
-          "mode": "view",
-          "viewer": "markdown"
-        },
-        {
-          "view": "editor",
-          "path": "docs/PROGRESS.md",
-          "mode": "view",
-          "viewer": "markdown"
-        },
-        {
-          "view": "editor",
-          "path": "docs/BUILDME.md",
-          "mode": "view",
-          "viewer": "markdown"
         }
       ],
-      "active": 2
+      "active": 0
     },
     "right": {
-      "tabs": [
-        {
-          "view": "files",
-          "path": ".",
-          "viewer": "text"
-        },
-        {
-          "view": "editor",
-          "path": "docs/NOTES.md",
-          "mode": "view",
-          "viewer": "markdown"
-        }
-      ],
+      "tabs": [],
       "active": 0
     }
   },
   "marked": [],
-  "promptDraft": "half-written thought"
+  "promptDraft": ""
 }

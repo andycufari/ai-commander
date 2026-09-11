@@ -1,0 +1,21 @@
+{
+  "id": "58ca02fc",
+  "name": "session 58ca02fc",
+  "model": "local-brain",
+  "created": 1789145621249,
+  "snapshots": [
+    {
+      "groupId": "gmtx73z5i",
+      "gitRef": "refs/aicommander/58ca02fc-gmtx73z5i"
+    },
+    {
+      "groupId": "gmtx741ol",
+      "gitRef": "refs/aicommander/58ca02fc-gmtx741ol"
+    },
+    {
+      "groupId": "gmtx75v3r",
+      "gitRef": "refs/aicommander/58ca02fc-gmtx75v3r"
+    }
+  ],
+  "specialTools": []
+}

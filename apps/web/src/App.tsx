@@ -12,6 +12,8 @@ import { addChips, fileAttachment, removeChip, type Chip } from "./chips.js";
 import { linkifyMentions } from "./mentions.js";
 import { Pick, defaultFilter, type PickItem } from "./Pick.js";
 import { Modal, type ModalButton } from "./Modal.js";
+import { LogView, jobStatus } from "./LogView.js";
+import { Navigator, type NavAction } from "./Navigator.js";
 import { modalOpen, unlessModal, useModalLock } from "./modal-stack.js";
 import { toPatch, toRuntimeTabs } from "./restore.js";
 import type { Attachment } from "@aicommander/protocol";
@@ -113,12 +115,16 @@ export function App(): JSX.Element {
   const conn = useRef<Connection>();
 
   /** Handlers that the socket callback needs but that change every render. */
-  const live = useRef<{ onShowFiles: (e: Extract<Event, { type: "show_files" }>) => void }>();
+  const live = useRef<{
+    onShowFiles: (e: Extract<Event, { type: "show_files" }>) => void;
+    onJobStart: (e: Extract<Event, { type: "job.start" }>) => void;
+  }>();
 
   useEffect(() => {
     const c = connect(
       (e) => {
         if (e.type === "show_files") live.current?.onShowFiles(e);
+      if (e.type === "job.start") live.current?.onJobStart(e);
         dispatch(e);
       },
       () => dispatch({ type: "__conn", connected: true }),
@@ -278,6 +284,13 @@ export function App(): JSX.Element {
    * keeps the handler current without re-subscribing the socket.
    */
   live.current = {
+    // Guard 4: a shell call that became a job gets its own log tab, in the panel the
+    // user is not reading — the same rule as show_files.
+    onJobStart: (e) => {
+      const side = targetSideFor();
+      const host = side === "left" ? left : right;
+      host.open({ view: "log", title: `job ${e.jobId}`, jobId: e.jobId });
+    },
     onShowFiles: (e) => {
       // `target` names where the files should land, but openFile opens *away* from the
       // side it is given — so pass the opposite. "other" means away from focus.
@@ -321,6 +334,39 @@ export function App(): JSX.Element {
     left.tabs, left.activeId, right.tabs, right.activeId,
     marked, draft,
   ]);
+
+  /** The session navigator (§10), and a pending job kill confirmation. */
+  const [navOpen, setNavOpen] = useState(false);
+  const [killJob, setKillJob] = useState<string | undefined>();
+  /** Groups whose truncate is waiting on a warning modal. */
+  const [confirmTruncate, setConfirmTruncate] = useState<string | undefined>();
+
+  const runNav = useCallback((action: NavAction, groupId: string) => {
+    const sessionId = state.sessionId;
+    if (!sessionId) return;
+    switch (action) {
+      case "fork":
+        conn.current?.send({ type: "session.rewind", sessionId, groupId, mode: "fork" });
+        setNavOpen(false);
+        return;
+      case "truncate":
+        // Reversible only by the snapshot it just took, so it asks first.
+        setConfirmTruncate(groupId);
+        return;
+      case "drop":
+        conn.current?.send({ type: "session.dropGroup", sessionId, groupId });
+        return;
+      case "dropOutputs":
+        conn.current?.send({ type: "session.dropToolOutput", sessionId, groupId });
+        return;
+      case "compact":
+        conn.current?.send({ type: "session.compact", sessionId });
+        setNavOpen(false);
+        return;
+      default:
+        return;
+    }
+  }, [state.sessionId]);
 
   /** Which pick modal is open, if any (§11). */
   const [pick, setPick] = useState<
@@ -398,7 +444,7 @@ export function App(): JSX.Element {
         toast("info", "the + picker arrives in M3 — use @ in the prompt, or ⌘P");
         return;
       case "rewind":
-        toast("info", "rewind arrives in M2");
+        setNavOpen(true);
         return;
       default:
         toast("warning", `unknown command: /${id}`);
@@ -407,6 +453,8 @@ export function App(): JSX.Element {
 
   /** ⌘K leader: the next key picks an action (§11). */
   const [leaderArmed, setLeaderArmed] = useState(false);
+  /** When Esc was last pressed, for the Esc Esc chord. */
+  const lastEscape = useRef(0);
 
   const runAction = useCallback((id: string) => {
     switch (id) {
@@ -430,7 +478,7 @@ export function App(): JSX.Element {
       case "compact":
       case "clear":
       case "rewind":
-        runCommand(id);
+        setNavOpen(true);
         return;
       default:
         return;
@@ -450,7 +498,16 @@ export function App(): JSX.Element {
 
       if (e.key === "Escape") {
         if (leaderArmed) { setLeaderArmed(false); return; }
-        if (state.status === "running") { e.preventDefault(); cancel(); }
+        if (state.status === "running") { e.preventDefault(); cancel(); return; }
+        // Esc Esc on an idle session opens the navigator (§10).
+        const now = Date.now();
+        if (now - lastEscape.current < 500) {
+          e.preventDefault();
+          setNavOpen(true);
+          lastEscape.current = 0;
+        } else {
+          lastEscape.current = now;
+        }
         return;
       }
 
@@ -550,6 +607,15 @@ export function App(): JSX.Element {
             onEscape={focusChat}
           />
         );
+      case "log":
+        return (
+          <LogView
+            job={tab.jobId ? state.jobs[tab.jobId] : undefined}
+            focused={layout.focus === side}
+            onKill={(jobId) => setKillJob(jobId)}
+            onEscape={focusChat}
+          />
+        );
       case "files":
         return (
           <FilesView
@@ -573,6 +639,10 @@ export function App(): JSX.Element {
   };
 
   const panelExtra = (tab: Tab | undefined): React.ReactNode => {
+    if (tab?.view === "log") {
+      const job = tab.jobId ? state.jobs[tab.jobId] : undefined;
+      return <span className={job?.running ? "amber" : undefined}>{jobStatus(job)}</span>;
+    }
     if (tab?.view !== "chat") return null;
     return running
       ? <span className="amber">running</span>
@@ -710,6 +780,54 @@ export function App(): JSX.Element {
             {state.permission.tool}
             {state.permission.rule.startsWith("ask-") ? "" : ` · rule ${state.permission.rule}`}
           </span>
+        </Modal>
+      )}
+      {navOpen && (
+        <Navigator
+          groups={state.groups}
+          snapshots={new Set(state.snapshots)}
+          onAction={runNav}
+          onClose={() => setNavOpen(false)}
+        />
+      )}
+      {confirmTruncate && (
+        <Modal
+          tier="warning"
+          title="truncate"
+          buttons={[
+            { id: "cancel", label: "cancel", letter: "c", isDefault: true, isSafe: true },
+            { id: "truncate", label: "truncate here", letter: "t" },
+          ]}
+          onChoose={(id) => {
+            if (id === "truncate" && state.sessionId) {
+              conn.current?.send({
+                type: "session.rewind", sessionId: state.sessionId,
+                groupId: confirmTruncate, mode: "truncate",
+              });
+              setNavOpen(false);
+            }
+            setConfirmTruncate(undefined);
+          }}
+        >
+          {`Everything after this turn is removed from the session, and the files are restored to how they were. `}
+          {`The turns after it cannot be brought back.`}
+        </Modal>
+      )}
+      {killJob && (
+        <Modal
+          tier="warning"
+          title="kill job"
+          buttons={[
+            { id: "cancel", label: "cancel", letter: "c", isDefault: true, isSafe: true },
+            { id: "kill", label: "kill it", letter: "k" },
+          ]}
+          onChoose={(id) => {
+            if (id === "kill") conn.current?.send({ type: "job.kill", jobId: killJob });
+            setKillJob(undefined);
+          }}
+        >
+          {`Stop ${state.jobs[killJob]?.cmd ?? "this job"}? `}
+          {`It gets SIGTERM, then SIGKILL after five seconds. You can run it again.`}
         </Modal>
       )}
       {state.ask && (
@@ -1171,6 +1289,13 @@ function Prompt({
   );
 }
 
+/** Compact sizes for the status line, matching the files view's style. */
+function fmtBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}M`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}k`;
+  return `${bytes}b`;
+}
+
 function StatusLine({
   state, layout,
 }: { state: UiState; layout: { focus: string; other: string; gutter: number } }): JSX.Element {
@@ -1195,6 +1320,11 @@ function StatusLine({
       <div className="r">
         {state.error && <span className="red">{state.error}</span>}
         {state.queued && <span className="amber">1 queued</span>}
+        {state.lastSnapshot && (
+          <span title="the snapshot taken before the last turn">
+            snap {fmtBytes(state.lastSnapshot.bytes)} · {state.lastSnapshot.ms}ms
+          </span>
+        )}
       </div>
     </div>
   );

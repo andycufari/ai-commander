@@ -24,6 +24,8 @@ export interface ChatRow {
 }
 
 export interface UiState {
+  /** Groups, for the navigator. Kept alongside rows, which are render-shaped. */
+  groups: Group[];
   connected: boolean;
   config?: Config;
   /** Repo root, for the top line. */
@@ -50,6 +52,15 @@ export interface UiState {
   permission?: Extract<Event, { type: "permission.request" }>;
   /** ask_user, or a guard pause (§6). The loop is paused until answered. */
   ask?: Extract<Event, { type: "ask.request" }>;
+  /** Background jobs and their output (§6 guard 4). */
+  jobs: Record<string, {
+    jobId: string; cmd: string; running: boolean;
+    exitCode: number | null; killed: boolean; lines: string[];
+  }>;
+  /** Group ids with a snapshot, for the navigator. */
+  snapshots: string[];
+  /** What the last snapshot cost, for the status line. */
+  lastSnapshot?: { bytes: number; ms: number };
   /** Bumped by fs.changed, so the files view re-lists. */
   revision: number;
   /**
@@ -74,6 +85,9 @@ export const initialState: UiState = {
   touched: [],
   revision: 0,
   fileRevisions: {},
+  jobs: {},
+  snapshots: [],
+  groups: [],
 };
 
 /** Local echo: the backend's turn.start carries no text, so a sent message would not
@@ -104,6 +118,8 @@ export function reduce(state: UiState, event: Event): UiState {
         sessionId: event.sessionId,
         rows: keepRows ? state.rows : groupsToRows(event.groups),
         touched: event.touched,
+        snapshots: event.meta.snapshots.map((snap) => snap.groupId),
+        groups: event.groups,
       };
     }
 
@@ -152,6 +168,53 @@ export function reduce(state: UiState, event: Event): UiState {
             ? { ...r, running: false, ok: event.ok, summary: event.summary + (event.truncated ? " · truncated" : "") }
             : r,
         ),
+      };
+
+    case "job.start":
+      return {
+        ...state,
+        jobs: {
+          ...state.jobs,
+          [event.jobId]: {
+            jobId: event.jobId, cmd: event.cmd,
+            running: true, exitCode: null, killed: false, lines: [],
+          },
+        },
+      };
+
+    case "job.output": {
+      const job = state.jobs[event.jobId];
+      if (!job) return state;
+      // Split on newlines and keep the last 200, matching the backend's ring buffer.
+      const merged = [...job.lines];
+      const parts = event.delta.split("\n");
+      const first = parts.shift() ?? "";
+      if (merged.length > 0 && first) merged[merged.length - 1] += first;
+      else if (first) merged.push(first);
+      merged.push(...parts);
+      return {
+        ...state,
+        jobs: { ...state.jobs, [event.jobId]: { ...job, lines: merged.slice(-200) } },
+      };
+    }
+
+    case "job.end": {
+      const job = state.jobs[event.jobId];
+      if (!job) return state;
+      return {
+        ...state,
+        jobs: {
+          ...state.jobs,
+          [event.jobId]: { ...job, running: false, exitCode: event.code, killed: event.killed },
+        },
+      };
+    }
+
+    case "snapshot":
+      return {
+        ...state,
+        snapshots: [...state.snapshots, event.groupId],
+        lastSnapshot: { bytes: event.bytes, ms: event.ms },
       };
 
     case "permission.request":

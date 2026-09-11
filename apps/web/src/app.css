@@ -227,6 +227,23 @@ html, body, #root {
 .pick-row.sel .pick-detail { color: var(--hi); }
 .pick-empty { color: var(--dim); padding: 4px; }
 
+/* session navigator (§10) */
+.navigator { width: 640px; display: flex; flex-direction: column; gap: 6px; }
+.nav-list { max-height: 50vh; overflow-y: auto; }
+.nav-row {
+  display: flex; gap: 12px; align-items: baseline;
+  padding: 2px 4px; cursor: pointer;
+}
+.nav-row.sel { background: var(--sel); color: var(--hi); }
+.nav-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-meta { color: var(--dim); white-space: nowrap; }
+.nav-row.sel .nav-meta { color: var(--hi); }
+
+/* log view — a background job's output (§10) */
+.body.log { outline: none; white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-line { color: var(--ink); }
+.log-line:empty::after { content: " "; }
+
 /* toasts — bottom-right, stack 3 (§10) */
 .toasts {
   position: fixed; right: 12px; bottom: 46px;

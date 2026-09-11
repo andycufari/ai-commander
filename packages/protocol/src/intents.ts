@@ -72,6 +72,9 @@ export const OptionsSet = intent("options.set", {
   patch: PartialConfig,
 });
 
+/** §10 log view: stop a background job. SIGTERM, then SIGKILL after 5s. */
+export const JobKill = intent("job.kill", { jobId: z.string() });
+
 export const FsList = intent("fs.list", { path: z.string() });
 /** Every file under the root, for ⌃P fuzzy open (§11). Directories are not included. */
 export const FsTree = intent("fs.tree", { limit: z.number().int().positive().default(5000) });
@@ -107,7 +110,7 @@ export const Intent = z.discriminatedUnion("type", [
   SessionSend, SessionCancel, SessionRewind, SessionDropGroup, SessionDropToolOutput,
   SessionCompact, SessionClear,
   PermissionAnswerIntent, AskAnswer, FilesShown, OptionsSet,
-  FsList, FsTree, FoldersList, FsRead, FsWrite, FsMkdir, FsRename, FsCopy, FsMove, FsDelete,
+  JobKill, FsList, FsTree, FoldersList, FsRead, FsWrite, FsMkdir, FsRename, FsCopy, FsMove, FsDelete,
   GitStatus, GitLog, GitDiff, GitCommit, GitCheckout,
   WorkspaceSet, WorkspaceGet, ViewerList, ViewerInstall,
 ]);

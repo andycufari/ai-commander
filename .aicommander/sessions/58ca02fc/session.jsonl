@@ -1,0 +1,13 @@
+{"t":"user","id":"gmtx73z5i","ts":1789145624503,"text":"say the word apple","attachments":[]}
+{"t":"snapshot","ts":1789145624613,"group":"gmtx73z5i","ref":"refs/aicommander/58ca02fc-gmtx73z5i"}
+{"t":"brain","id":"gmtx73z5i","ts":1789145625215,"text":"apple","toolCalls":[]}
+{"t":"user","id":"gmtx741ol","ts":1789145627781,"text":"now say banana","attachments":[]}
+{"t":"snapshot","ts":1789145627841,"group":"gmtx741ol","ref":"refs/aicommander/58ca02fc-gmtx741ol"}
+{"t":"brain","id":"gmtx741ol","ts":1789145628436,"text":"banana","toolCalls":[]}
+{"t":"user","id":"gmtx75v3r","ts":1789145712568,"text":"look at @CLAUDE.md and @nothing here","attachments":[]}
+{"t":"snapshot","ts":1789145712671,"group":"gmtx75v3r","ref":"refs/aicommander/58ca02fc-gmtx75v3r"}
+{"t":"brain","id":"gmtx75v3r","ts":1789145714180,"text":"","toolCalls":[{"callId":"0bu8TpA4YDVCARHBZcEdXR4aZYZVaZVI","name":"read_file","args":{"path":"CLAUDE.md"}},{"callId":"8Yk4GCTLcvHBaGB1OLvwyGTZZQKrTQGq","name":"read_file","args":{"path":"nothing"}}]}
+{"t":"tool","id":"gmtx75v3r","ts":1789145714183,"callId":"0bu8TpA4YDVCARHBZcEdXR4aZYZVaZVI","name":"read_file","args":{"path":"CLAUDE.md"},"ok":true,"summary":"6 lines","outputPath":null,"tokens":138}
+{"t":"tool","id":"gmtx75v3r","ts":1789145714187,"callId":"8Yk4GCTLcvHBaGB1OLvwyGTZZQKrTQGq","name":"read_file","args":{"path":"nothing"},"ok":false,"summary":"no such file: nothing","outputPath":null,"tokens":6}
+{"t":"brain","id":"gmtx75v3r","ts":1789145717105,"text":"","toolCalls":[{"callId":"wB8ogijuyGKWUjlAKRS4dqQUPLedoQvK","name":"glob","args":{"pattern":"docs/**"}},{"callId":"SD3Vt6rXbhnXmMz1SUKGnif5o3mYoaT2","name":"shell","args":{"cmd":"ls -la"}}]}
+{"t":"tool","id":"gmtx75v3r","ts":1789145717109,"callId":"wB8ogijuyGKWUjlAKRS4dqQUPLedoQvK","name":"glob","args":{"pattern":"docs/**"},"ok":true,"summary":"6 files","outputPath":null,"tokens":45}
