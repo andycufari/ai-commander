@@ -84,8 +84,8 @@ First-use feedback moved several things forward:
 
 - [ ] Guards 1–7 (§6)
 - [ ] Background jobs + log view
-- [ ] Permission engine + rules.json + danger/warning modals (v2 contract)
-- [ ] Modes ask / auto / plan
+- [x] Permission engine + rules.json + danger/warning/info modals (v2 contract)
+- [x] Modes ask / auto / plan
 - [ ] Options modal (session/project/global)
 - [ ] Snapshots + session navigator (fork/truncate/drop group/drop outputs)
 - [ ] Compact (manual + auto), clear, queue/steer

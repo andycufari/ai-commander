@@ -46,6 +46,8 @@ export interface UiState {
   /** The restored layout. Until it arrives the app does not paint, so a saved
    *  layout never flashes the default one first (v2 §4). */
   workspace?: Workspace;
+  /** A permission ask waiting on the user (§8). The loop is paused until answered. */
+  permission?: Extract<Event, { type: "permission.request" }>;
   /** Bumped by fs.changed, so the files view re-lists. */
   revision: number;
   /**
@@ -106,6 +108,8 @@ export function reduce(state: UiState, event: Event): UiState {
     case "session.state":
       return {
         ...state,
+        // A settled loop cannot still be waiting on a permission.
+        permission: event.status === "running" ? state.permission : undefined,
         status: event.status,
         toolCount: event.toolCount,
         elapsed: event.elapsed,
@@ -146,6 +150,9 @@ export function reduce(state: UiState, event: Event): UiState {
             : r,
         ),
       };
+
+    case "permission.request":
+      return { ...state, permission: event };
 
     case "workspace":
       return { ...state, workspace: event.workspace };

@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { Config, type Event } from "@aicommander/protocol";
+import { Config, DEFAULT_RULES, type Event } from "@aicommander/protocol";
 import { ensureProjectDir } from "../src/config.js";
 import { Loop } from "../src/loop.js";
 import { SessionStore } from "../src/sessions.js";
@@ -47,8 +47,8 @@ const setup = async () => {
   const sessions = new SessionStore(root);
   const meta = await sessions.create("t");
   const events: Event[] = [];
-  const config = Config.parse({ brain: { endpoint: base, model: "test" } });
-  const loop = new Loop({ root, config, sessions, emit: (e) => events.push(e) });
+  const config = Config.parse({ brain: { endpoint: base, model: "test" }, mode: "auto" });
+  const loop = new Loop({ root, config, rules: DEFAULT_RULES, sessions, emit: (e) => events.push(e) });
   calls = 0;
   return { root, sessions, loop, events, meta, config };
 };
@@ -185,7 +185,7 @@ describe("loop", () => {
     const { sessions, meta } = await setup();
     const events: Event[] = [];
     const config = Config.parse({ brain: { endpoint: "http://127.0.0.1:1/v1", model: "m" } });
-    const loop = new Loop({ root: roots.at(-1)!, config, sessions, emit: (e) => events.push(e) });
+    const loop = new Loop({ root: roots.at(-1)!, config, rules: DEFAULT_RULES, sessions, emit: (e) => events.push(e) });
     await loop.send(meta.id, "hi");
     expect(events.some((e) => e.type === "error")).toBe(true);
     expect(events.filter((e) => e.type === "session.state").at(-1)).toMatchObject({ status: "idle" });
@@ -198,7 +198,7 @@ describe("loop", () => {
       brain: { endpoint: base, model: "test" },
       loop: { maxTurnsPerPrompt: 2 },
     });
-    const loop = new Loop({ root, config, sessions, emit: (e) => events.push(e) });
+    const loop = new Loop({ root, config, rules: DEFAULT_RULES, sessions, emit: (e) => events.push(e) });
     // Always ask for another tool — the cap is what must stop it.
     responses = Array.from({ length: 10 }, () => [callTool("c1", "glob", { pattern: "*" })]);
     await loop.send(meta.id, "go");

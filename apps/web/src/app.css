@@ -146,6 +146,9 @@ html, body, #root {
   padding: 14px 16px 12px;
   min-width: 420px;
   max-width: min(90vw, 720px);
+  /* The modal takes focus to receive keys; the browser's focus ring would sit on top
+     of the tier border, which is the one thing that must read at a glance (v2 §1). */
+  outline: none;
 }
 .modal > .t {
   position: absolute; top: -9px; left: 14px;
@@ -155,8 +158,48 @@ html, body, #root {
   position: absolute; bottom: -9px; right: 14px;
   background: var(--panel); padding: 0 6px; color: var(--dim); font-size: 11px;
 }
+/* tier: info — tells you something; Enter is the action */
 .modal.info { border: 1px solid var(--line); }
 .modal.info > .t { color: var(--dim); }
+.modal.info .btn.on { border-color: var(--hi); background: var(--sel); color: var(--hi); }
+.modal.info .btn b { color: var(--hi); }
+
+/* tier: warning — reversible but costly; Enter is the safe option */
+.modal.warning { border: 1px solid var(--amber); }
+.modal.warning > .t { color: var(--amber); }
+.modal.warning .btn b { color: var(--amber); }
+.modal.warning .btn.on { border-color: var(--amber); background: var(--sel); color: var(--amber); }
+
+/* tier: danger — irreversible; double border, shadow, no Enter default */
+.modal.danger {
+  border: 3px double var(--red);
+  box-shadow: 10px 10px 0 rgba(0, 0, 0, 0.55);
+}
+.modal.danger > .t { color: var(--red); }
+.modal.danger .btn b { color: var(--red); }
+.modal-scrim.dim { background: rgba(0, 0, 0, 0.6); }
+
+.modal-body { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; }
+.modal-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.btn {
+  display: inline-block; border: 1px solid var(--line);
+  padding: 1px 9px; color: var(--ink); cursor: pointer;
+}
+.btn b { font-weight: 500; margin-right: 5px; }
+.btn:hover { border-color: var(--hi); }
+.modal-edit {
+  width: 100%; margin-top: 8px; background: var(--bg); color: var(--ink);
+  border: 1px solid var(--red); font: inherit; padding: 4px 6px; outline: none; resize: vertical;
+}
+
+/* the command a rule matched, shown as the user would type it */
+.modal-command {
+  display: block; margin: 6px 0; padding: 4px 8px;
+  background: var(--bg); border-left: 2px solid var(--line); color: var(--amber);
+}
+.modal.danger .modal-command { border-left-color: var(--red); }
+.modal.warning .modal-command { border-left-color: var(--amber); }
+.modal-reason { color: var(--dim); }
 
 /* pick — info frame with a filterable list (v2 "the other three shapes") */
 .pick { display: flex; flex-direction: column; gap: 6px; width: 560px; }

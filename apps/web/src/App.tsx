@@ -11,8 +11,35 @@ import { defaultRegistry } from "./viewers.js";
 import { addChips, fileAttachment, removeChip, type Chip } from "./chips.js";
 import { linkifyMentions } from "./mentions.js";
 import { Pick, defaultFilter, type PickItem } from "./Pick.js";
+import { Modal, type ModalButton } from "./Modal.js";
 import { toPatch, toRuntimeTabs } from "./restore.js";
 import type { Attachment } from "@aicommander/protocol";
+
+/**
+ * v2 §1: the safe option is always the one Esc maps to, and a danger modal has no
+ * Enter default — someone has to choose.
+ */
+function permissionButtons(tier: "info" | "warning" | "danger"): ModalButton[] {
+  if (tier === "danger") {
+    return [
+      { id: "once", label: "allow once", letter: "a" },
+      { id: "session", label: "allow for this session", letter: "s" },
+      { id: "deny", label: "deny", letter: "d", isSafe: true },
+    ];
+  }
+  if (tier === "warning") {
+    return [
+      { id: "deny", label: "deny", letter: "d", isDefault: true, isSafe: true },
+      { id: "once", label: "allow once", letter: "a" },
+      { id: "session", label: "allow for this session", letter: "s" },
+    ];
+  }
+  return [
+    { id: "once", label: "allow", letter: "a", isDefault: true },
+    { id: "session", label: "always in this session", letter: "s" },
+    { id: "deny", label: "deny", letter: "d", isSafe: true },
+  ];
+}
 
 /** §11 slash commands. Anything needing M2/M3 machinery says so rather than
  *  silently doing nothing. */
@@ -32,9 +59,14 @@ const COMMANDS: { name: string; detail: string }[] = [
 
 export function App(): JSX.Element {
   const [state, dispatch] = useReducer(
-    (s: UiState, e: Event | { type: "__conn"; connected: boolean } | { type: "__echo"; text: string }): UiState => {
+    (
+      s: UiState,
+      e: Event | { type: "__conn"; connected: boolean } | { type: "__echo"; text: string }
+        | { type: "__answered" },
+    ): UiState => {
       if (e.type === "__conn") return { ...s, connected: e.connected };
       if (e.type === "__echo") return echoUser(s, e.text);
+      if (e.type === "__answered") return { ...s, permission: undefined };
       return reduce(s, e);
     },
     initialState,
@@ -372,6 +404,11 @@ export function App(): JSX.Element {
   // Global keys (§11). Chords are ⌘-based; see keys.ts for why not F-keys.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      // A modal owns the keyboard while it is up. React's stopPropagation cannot hold
+      // back a native window listener, so the guard lives here: Esc in a permission
+      // ask must deny that one call, not cancel the whole turn.
+      if (document.querySelector(".modal-scrim")) return;
+
       if (e.key === "Escape") {
         if (leaderArmed) { setLeaderArmed(false); return; }
         if (state.status === "running") { e.preventDefault(); cancel(); }
@@ -610,6 +647,31 @@ export function App(): JSX.Element {
           }}
           onClose={() => setPick(null)}
         />
+      )}
+      {state.permission && (
+        <Modal
+          tier={state.permission.level}
+          title={state.permission.level === "danger" ? "danger" : state.permission.level === "warning" ? "warning" : "allow?"}
+          editable={state.permission.tool === "shell" ? state.permission.command : undefined}
+          buttons={permissionButtons(state.permission.level)}
+          onChoose={(id, edited) => {
+            const requestId = state.permission!.requestId;
+            conn.current?.send({
+              type: "permission.answer",
+              requestId,
+              answer: id === "session" ? "session" : id === "deny" ? "deny" : "once",
+              ...(edited !== undefined ? { editedCommand: edited } : {}),
+            });
+            dispatch({ type: "__answered" });
+          }}
+        >
+          <span className="modal-reason">{state.permission.reason}</span>
+          <code className="modal-command">{state.permission.command}</code>
+          <span className="modal-reason">
+            {state.permission.tool}
+            {state.permission.rule.startsWith("ask-") ? "" : ` · rule ${state.permission.rule}`}
+          </span>
+        </Modal>
       )}
       {pick === "folders" && (
         <Pick

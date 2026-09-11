@@ -2,7 +2,13 @@ import { z } from "zod";
 
 /** §8 permissions. rules.json: global merged with project, project wins on same id. */
 
-export const RuleLevel = z.enum(["danger", "warning"]);
+/**
+ * The modal tier a rule raises (v2 §1):
+ *   info    — tells you something; Enter is the action. Ask mode's routine writes.
+ *   warning — reversible but costly; Enter is the safe option.
+ *   danger  — irreversible; no Enter default, Esc denies.
+ */
+export const RuleLevel = z.enum(["info", "warning", "danger"]);
 export type RuleLevel = z.infer<typeof RuleLevel>;
 
 /** Which tool a rule applies to; omitted means every tool. */

@@ -71,7 +71,7 @@ export async function serve(opts: ServeOptions): Promise<Serving> {
     for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(line);
   };
 
-  const loop = new Loop({ root, config, sessions, emit: broadcast });
+  const loop = new Loop({ root, config, rules, sessions, emit: broadcast });
   const workspace = new WorkspaceStore(root);
   const ctx: Ctx = { root, config, rules, sessions, loop, workspace, broadcast, send: broadcast };
 

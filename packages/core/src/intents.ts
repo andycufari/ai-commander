@@ -132,10 +132,17 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
       return;
     }
 
+    case "permission.answer": {
+      ctx.loop.resolvePermission(intent.requestId, {
+        answer: intent.answer,
+        editedCommand: intent.editedCommand,
+      });
+      return;
+    }
+
     case "session.dropGroup":
     case "session.dropToolOutput":
     case "session.compact":
-    case "permission.answer":
     case "ask.answer":
       throw new Error(`${intent.type} arrives with the agent loop`);
 

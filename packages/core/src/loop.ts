@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { stat } from "node:fs/promises";
-import { ToolArgs, type Config, type Event, type LogEntry, type ToolResult } from "@aicommander/protocol";
+import {
+  ToolArgs, type Config, type Event, type LogEntry, type Rules, type ToolResult,
+} from "@aicommander/protocol";
+import { check } from "./permissions.js";
 import { resolveInRoot } from "./paths.js";
 import { BrainClient, BrainError, type BrainMessage, type ToolSpec } from "./brain.js";
 import { projectDir } from "./config.js";
@@ -29,6 +32,7 @@ export interface ShowResult {
 export interface LoopDeps {
   root: string;
   config: Config;
+  rules: Rules;
   sessions: SessionStore;
   emit: (event: Event) => void;
 }
@@ -42,10 +46,23 @@ interface Running {
   toolCount: number;
   /** Guard 5: a message sent while running lands at the next tool boundary. */
   queued: string[];
+  /** Rules the user answered "allow for this session" on (§8). */
+  allowedRules: Set<string>;
+}
+
+/** The user's answer to a permission ask. */
+export interface PermissionReply {
+  answer: "once" | "session" | "deny";
+  /** Set when the user rewrote the command before allowing it. */
+  editedCommand?: string;
 }
 
 export class Loop {
   private readonly running = new Map<string, Running>();
+  /** Permission asks waiting for the user (§8). */
+  private readonly permissionWaits = new Map<string, (a: PermissionReply) => void>();
+  /** "Allow for this session" survives between turns of the same session. */
+  private readonly sessionAllowances = new Map<string, Set<string>>();
   /** show_files calls waiting for the UI to report what it did with each path. */
   private readonly showWaits = new Map<string, (r: ShowResult[]) => void>();
 
@@ -61,6 +78,80 @@ export class Loop {
     if (!run) return false;
     run.controller.abort();
     return true;
+  }
+
+  /** The user answering a permission ask (§8). */
+  resolvePermission(requestId: string, reply: PermissionReply): boolean {
+    const waiter = this.permissionWaits.get(requestId);
+    if (!waiter) return false;
+    this.permissionWaits.delete(requestId);
+    waiter(reply);
+    return true;
+  }
+
+  /**
+   * §8: decide whether a call may run, asking the user when a rule says so.
+   *
+   * A pending ask holds the loop — that is the point — but Esc must still cancel it,
+   * so the abort signal resolves the wait as a denial rather than leaving it hanging.
+   */
+  private async permit(
+    sessionId: string,
+    run: Running,
+    call: { callId: string; name: string; args: Record<string, unknown> },
+    signal: AbortSignal,
+  ): Promise<{ ok: true; args: Record<string, unknown> } | { ok: false; reason: string }> {
+    const decision = check({
+      tool: call.name,
+      args: call.args,
+      rules: this.deps.rules,
+      mode: this.deps.config.mode,
+      sessionAllowed: run.allowedRules,
+    });
+
+    if (decision.kind === "allow") return { ok: true, args: call.args };
+    if (decision.kind === "deny") return { ok: false, reason: decision.reason };
+
+    const requestId = randomUUID().slice(0, 8);
+    this.deps.emit(ev("permission.request", {
+      requestId,
+      sessionId,
+      tool: call.name,
+      command: decision.command,
+      rule: decision.rule.id,
+      reason: decision.reason,
+      level: decision.level,
+    }));
+
+    const reply = await new Promise<PermissionReply>((resolve) => {
+      const onAbort = (): void => {
+        this.permissionWaits.delete(requestId);
+        resolve({ answer: "deny" });
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      this.permissionWaits.set(requestId, (r) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(r);
+      });
+    });
+
+    await this.deps.sessions.append(sessionId, {
+      t: "permission", ts: Date.now(), callId: call.callId,
+      rule: decision.rule.id, answer: reply.answer,
+    });
+
+    if (reply.answer === "deny") {
+      // The model is told the rule's own words, so it can choose a different approach
+      // rather than retrying the same blocked command (§8).
+      return { ok: false, reason: `Denied by the user: ${decision.reason}.` };
+    }
+    if (reply.answer === "session") run.allowedRules.add(decision.rule.id);
+
+    // "edit" hands back a command the user rewrote; run that instead.
+    const args = reply.editedCommand !== undefined && call.name === "shell"
+      ? { ...call.args, cmd: reply.editedCommand }
+      : call.args;
+    return { ok: true, args };
   }
 
   /** The UI answering a show_files request (§5). */
@@ -174,7 +265,12 @@ export class Loop {
     const { root, config, sessions, emit } = this.deps;
     const meta = await sessions.readMeta(sessionId);
     const controller = new AbortController();
-    const run: Running = { controller, startedAt: Date.now(), toolCount: 0, queued: [] };
+    const run: Running = {
+      controller, startedAt: Date.now(), toolCount: 0, queued: [],
+      // Session allowances persist across turns within one session.
+      allowedRules: this.sessionAllowances.get(sessionId) ?? new Set(),
+    };
+    this.sessionAllowances.set(sessionId, run.allowedRules);
     this.running.set(sessionId, run);
 
     const groupId = `g${Date.now().toString(36)}`;
@@ -235,8 +331,23 @@ export class Loop {
             break;
           }
 
+          // §8: permission before anything runs.
+          const permitted = await this.permit(sessionId, run, call, controller.signal);
+          if (!permitted.ok) {
+            emit(ev("tool.end", {
+              callId: call.callId, ok: false, summary: "blocked", truncated: false,
+            }));
+            await sessions.append(sessionId, {
+              t: "tool", id: groupId, ts: Date.now(), callId: call.callId, name: call.name,
+              args: call.args, ok: false, summary: "blocked", outputPath: null, tokens: 0,
+            });
+            messages.push(toolMessage(call.callId, call.name, permitted.reason));
+            continue;
+          }
+          const args = permitted.args;
+
           run.toolCount += 1;
-          emit(ev("tool.start", { sessionId, groupId, callId: call.callId, name: call.name, args: call.args }));
+          emit(ev("tool.start", { sessionId, groupId, callId: call.callId, name: call.name, args }));
 
           const ctx: ToolCtx = {
             root,
@@ -249,8 +360,8 @@ export class Loop {
 
           const res: ToolResult =
             call.name === "show_files"
-              ? await this.showFiles(call.args, controller.signal)
-              : await runTool(call.name, call.args, ctx);
+              ? await this.showFiles(args, controller.signal)
+              : await runTool(call.name, args, ctx);
 
           emit(ev("tool.end", {
             callId: call.callId,
@@ -261,7 +372,7 @@ export class Loop {
           }));
           await sessions.append(sessionId, {
             t: "tool", id: groupId, ts: Date.now(), callId: call.callId, name: call.name,
-            args: call.args, ok: res.ok, summary: res.summary,
+            args, ok: res.ok, summary: res.summary,
             outputPath: res.outputPath ?? null, tokens: estimate(res.content),
           });
           messages.push(toolMessage(call.callId, call.name, res.content));
