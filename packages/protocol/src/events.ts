@@ -98,6 +98,16 @@ export const GitChanged = event("git.changed", {
 });
 
 export const Toast = event("toast", { level: z.enum(["info", "warning"]), text: z.string() });
+/** Reply to session.compactPlan: what a compaction would cost, before doing it. */
+export const CompactPlanned = event("compact.plan", {
+  intentId: z.string(),
+  sessionId: z.string(),
+  /** Groups that would be summarised away. */
+  groups: z.number().int().nonnegative(),
+  before: z.number().int().nonnegative(),
+  after: z.number().int().nonnegative(),
+  files: z.array(z.string()),
+});
 export const CompactDone = event("compact.done", {
   sessionId: z.string(),
   before: z.number().int(),
@@ -185,7 +195,7 @@ export const Event = z.discriminatedUnion("type", [
   PermissionRequest, AskRequest,
   JobStart, JobOutput, JobEnd,
   ShowFiles, MentionAdd, FsChanged, GitChanged,
-  Toast, CompactDone, WorkspaceEvent, ErrorEvent,
+  Toast, CompactDone, CompactPlanned, WorkspaceEvent, ErrorEvent,
   FsListed, FsTreeListed, FoldersListed, FsContent, FsWrote, GitResult, SessionList, SessionEvents, ConfigEvent,
 ]);
 export type Event = z.infer<typeof Event>;

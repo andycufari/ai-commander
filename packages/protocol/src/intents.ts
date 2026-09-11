@@ -43,6 +43,8 @@ export const SessionDropToolOutput = intent("session.dropToolOutput", {
   groupId: z.string(),
 });
 export const SessionCompact = intent("session.compact", { sessionId: z.string() });
+/** What compacting would do, for the warning modal's estimate (§6). */
+export const SessionCompactPlan = intent("session.compactPlan", { sessionId: z.string() });
 export const SessionClear = intent("session.clear", { sessionId: z.string() });
 
 export const PermissionAnswerIntent = intent("permission.answer", {
@@ -108,7 +110,7 @@ export const ViewerInstall = intent("viewer.install", { name: z.string() });
 export const Intent = z.discriminatedUnion("type", [
   SessionCreate, SessionOpen, SessionClose, SessionRename, SessionDelete,
   SessionSend, SessionCancel, SessionRewind, SessionDropGroup, SessionDropToolOutput,
-  SessionCompact, SessionClear,
+  SessionCompact, SessionCompactPlan, SessionClear,
   PermissionAnswerIntent, AskAnswer, FilesShown, OptionsSet,
   JobKill, FsList, FsTree, FoldersList, FsRead, FsWrite, FsMkdir, FsRename, FsCopy, FsMove, FsDelete,
   GitStatus, GitLog, GitDiff, GitCommit, GitCheckout,

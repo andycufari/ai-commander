@@ -340,6 +340,9 @@ export function App(): JSX.Element {
   const [killJob, setKillJob] = useState<string | undefined>();
   /** Groups whose truncate is waiting on a warning modal. */
   const [confirmTruncate, setConfirmTruncate] = useState<string | undefined>();
+  const [compactPlan, setCompactPlan] = useState<
+    { groups: number; before: number; after: number; files: string[] } | undefined
+  >();
 
   const runNav = useCallback((action: NavAction, groupId: string) => {
     const sessionId = state.sessionId;
@@ -438,7 +441,12 @@ export function App(): JSX.Element {
         setPick("touched");
         return;
       case "compact":
-        if (sessionId) conn.current?.send({ type: "session.compact", sessionId });
+        // Ask first: compaction rewrites what the brain remembers, and the estimate
+        // is the only way to judge whether it is worth doing yet.
+        if (!sessionId) return;
+        conn.current?.request({ type: "session.compactPlan", sessionId }, "compact.plan")
+          .then((e) => setCompactPlan(e as never))
+          .catch(() => toast("warning", "could not work out what compacting would do"));
         return;
       case "attach":
         toast("info", "the + picker arrives in M3 — use @ in the prompt, or ⌘P");
@@ -811,6 +819,32 @@ export function App(): JSX.Element {
         >
           {`Everything after this turn is removed from the session, and the files are restored to how they were. `}
           {`The turns after it cannot be brought back.`}
+        </Modal>
+      )}
+      {compactPlan && (
+        <Modal
+          tier="warning"
+          title="compact"
+          buttons={[
+            { id: "cancel", label: "cancel", letter: "c", isDefault: true, isSafe: true },
+            { id: "compact", label: "compact", letter: "k" },
+          ]}
+          onChoose={(id) => {
+            if (id === "compact" && state.sessionId) {
+              conn.current?.send({ type: "session.compact", sessionId: state.sessionId });
+              toast("info", "compacting…");
+            }
+            setCompactPlan(undefined);
+          }}
+        >
+          {compactPlan.groups === 0
+            ? "There is nothing old enough to compact yet."
+            : `${compactPlan.groups} older turn${compactPlan.groups === 1 ? "" : "s"} become a summary: ` +
+              `about ${compactPlan.before} tokens → ${compactPlan.after}. ` +
+              `The last turns stay as they are` +
+              (compactPlan.files.length
+                ? `, and the ${compactPlan.files.length} changed file${compactPlan.files.length === 1 ? "" : "s"} are listed verbatim.`
+                : ".")}
         </Modal>
       )}
       {killJob && (

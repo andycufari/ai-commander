@@ -207,9 +207,12 @@ describe("serve", () => {
     expect(seen).toContain("config");
   }, 10000);
 
-  it("reports an unimplemented intent instead of dying", async () => {
-    send({ id: "i-todo", type: "session.compact", sessionId: "whatever" });
+  it("reports a bad intent instead of dying", async () => {
+    // Every loop intent is implemented now, so this asserts the error path itself:
+    // an intent naming a session that does not exist must not take the backend down.
+    send({ id: "i-todo", type: "session.open", sessionId: "no-such-session" });
     const e = await waitFor((x) => x.type === "error" && x.intentId === "i-todo");
-    expect((e as Extract<Event, { type: "error" }>).message).toMatch(/agent loop/);
+    expect((e as Extract<Event, { type: "error" }>).message).toBeTruthy();
+    expect(ws.readyState).toBe(WebSocket.OPEN);
   });
 });

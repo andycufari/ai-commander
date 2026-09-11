@@ -8,6 +8,7 @@ import { check } from "./permissions.js";
 import { ErrorGuard, RepeatGuard } from "./guards.js";
 import { JobRegistry } from "./jobs.js";
 import { takeSnapshot } from "./snapshots.js";
+import { planCompact } from "./compact.js";
 import { resolveInRoot } from "./paths.js";
 import { BrainClient, BrainError, type BrainMessage, type ToolSpec } from "./brain.js";
 import { projectDir } from "./config.js";
@@ -76,6 +77,8 @@ export class Loop {
   readonly jobs: JobRegistry;
   /** Sessions already told their snapshots are slow; said once, never nagged. */
   private readonly slowSnapshotWarned = new Set<string>();
+  /** Sessions already told to compact; the 75% nudge is said once. */
+  private readonly compactSuggested = new Set<string>();
   /** show_files calls waiting for the UI to report what it did with each path. */
   private readonly showWaits = new Map<string, (r: ShowResult[]) => void>();
 
@@ -296,6 +299,38 @@ export class Loop {
       content: lines.join(" "),
       truncated: false,
     };
+  }
+
+  /**
+   * §6 auto-compact. At 75% the user is told; at 90% they are asked, because past that
+   * the next turn may not fit at all. The compaction itself is never silent: a context
+   * window rewritten without telling anyone is a debugging nightmare.
+   */
+  private async considerCompacting(sessionId: string): Promise<void> {
+    const { config, sessions, emit } = this.deps;
+    const entries = await sessions.read(sessionId);
+    const groups = SessionStore.toGroups(sessionId, entries);
+    const used = groups.reduce((sum, g) => sum + g.tokens, 0);
+    const ratio = used / config.brain.ctx;
+
+    if (ratio < config.context.autoCompactAt) return;
+    const plan = planCompact(groups, entries, config.context.keepLastGroups);
+    if (plan.older.length === 0) return;
+
+    if (ratio >= 0.9) {
+      emit(ev("toast", {
+        level: "warning",
+        text: `context is ${Math.round(ratio * 100)}% full — compact soon (⌘K C)`,
+      }));
+      return;
+    }
+    if (!this.compactSuggested.has(sessionId)) {
+      this.compactSuggested.add(sessionId);
+      emit(ev("toast", {
+        level: "info",
+        text: `context is ${Math.round(ratio * 100)}% full — ⌘K C compacts the older turns`,
+      }));
+    }
   }
 
   /** §5 ask_user: the model asks, the loop pauses, the answer comes back as a result. */
@@ -548,6 +583,9 @@ export class Loop {
       }
       this.running.delete(sessionId);
       this.state(sessionId, cancelled ? "cancelled" : "idle", run);
+      // §6: auto-compact at 75%. Suggested, not forced — the user may be about to
+      // rewind, and compacting under them would make that useless.
+      await this.considerCompacting(sessionId).catch(() => {});
       // The turn may have touched files; refresh the ⌃⇧P list rather than leaving the
       // UI with what it had at session open.
       try {

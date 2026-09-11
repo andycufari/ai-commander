@@ -24,6 +24,7 @@ import { resolveInRoot, toRepoPath } from "./paths.js";
 import { globFiles } from "./tools.js";
 import { groupOf, SessionStore } from "./sessions.js";
 import { pruneSnapshots, restoreSnapshot } from "./snapshots.js";
+import { compactSession, planCompact } from "./compact.js";
 import type { Loop } from "./loop.js";
 import type { WorkspaceStore } from "./workspace.js";
 import { join } from "node:path";
@@ -230,8 +231,39 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
       return;
     }
 
-    case "session.compact":
-      throw new Error(`${intent.type} arrives with the agent loop`);
+    case "session.compactPlan": {
+      const entries = await ctx.sessions.read(intent.sessionId);
+      const plan = planCompact(
+        SessionStore.toGroups(intent.sessionId, entries),
+        entries,
+        ctx.config.context.keepLastGroups,
+      );
+      ctx.send(ev("compact.plan", {
+        intentId: intent.id,
+        sessionId: intent.sessionId,
+        groups: plan.older.length,
+        before: plan.before,
+        after: plan.after,
+        files: plan.files,
+      }));
+      return;
+    }
+
+    case "session.compact": {
+      const result = await compactSession(ctx.root, ctx.config, ctx.sessions, intent.sessionId);
+      if (!result) {
+        ctx.send(ev("toast", { level: "info", text: "nothing old enough to compact yet" }));
+        return;
+      }
+      ctx.broadcast(ev("compact.done", {
+        sessionId: intent.sessionId,
+        before: result.before,
+        after: result.after,
+        summaryPath: result.summaryPath,
+      }));
+      await sendSession(ctx, intent.sessionId);
+      return;
+    }
 
     case "options.set":
       throw new Error("options.set arrives with the options modal (M2)");
