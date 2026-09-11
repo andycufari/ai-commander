@@ -9,7 +9,7 @@ Update the checklist as items land. One commit per item (`M0: protocol package` 
 ## M0 — "Claude Code in a browser"
 
 - [x] 1. pnpm monorepo + `packages/protocol` (zod: WS intents, events, tool schemas, config)
-- [ ] 2. Backend `serve` with WS (`packages/core` + `bin/aicommander`), HTTP `/file`, `/upload`, `/static`
+- [x] 2. Backend `serve` with WS (`packages/core` + `bin/aicommander`), HTTP `/file`, `/upload`, `/static`, `--brain` override
 - [ ] 3. Web app shell — single panel, chat only (React + Vite, tokens from mockups)
 - [ ] 4. Brain client — streaming, tools, `toolFormat: auto` (OpenAI native + text-tag fallback)
 - [ ] 5. Core tools — read_file, write_file, edit_file, glob, grep, shell, git, ask_user
