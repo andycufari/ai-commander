@@ -9,7 +9,7 @@ import { z } from "zod";
  * means nothing across a restart.
  */
 
-export const ViewKind = z.enum(["chat", "files", "editor", "viewer", "log", "sql"]);
+export const ViewKind = z.enum(["chat", "files", "editor", "viewer", "log", "sql", "inspector"]);
 export type ViewKind = z.infer<typeof ViewKind>;
 
 export const PanelSide = z.enum(["left", "right"]);

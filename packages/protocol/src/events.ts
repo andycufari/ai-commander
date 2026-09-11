@@ -168,6 +168,21 @@ export const FoldersListed = event("folders.listed", {
   /** Where the non-recent entries were listed from. */
   under: z.string(),
 });
+/** Reply to skills.list — the / tab of the picker. */
+export const SkillsListed = event("skills.listed", {
+  intentId: z.string(),
+  skills: z.array(z.object({ name: z.string(), description: z.string() })),
+  /** Skills with no usable frontmatter, so the user hears about it once. */
+  skipped: z.array(z.string()),
+});
+
+/** Reply to image.add: where it landed, relative to the session directory. */
+export const ImageAdded = event("image.added", {
+  intentId: z.string(),
+  file: z.string(),
+  name: z.string(),
+});
+
 export const FsWrote = event("fs.wrote", {
   intentId: z.string(),
   path: z.string(),
@@ -208,7 +223,7 @@ export const Event = z.discriminatedUnion("type", [
   JobStart, JobOutput, JobEnd,
   ShowFiles, MentionAdd, FsChanged, GitChanged,
   Toast, CompactDone, CompactPlanned, WorkspaceEvent, ErrorEvent,
-  FsListed, FsTreeListed, FoldersListed, FsContent, FsWrote, GitResult, SessionList, SessionEvents, ConfigEvent,
+  FsListed, FsTreeListed, FoldersListed, SkillsListed, ImageAdded, FsContent, FsWrote, GitResult, SessionList, SessionEvents, ConfigEvent,
 ]);
 export type Event = z.infer<typeof Event>;
 export type EventType = Event["type"];

@@ -82,6 +82,15 @@ export const FsList = intent("fs.list", { path: z.string() });
 export const FsTree = intent("fs.tree", { limit: z.number().int().positive().default(5000) });
 /** §10 open folder: directories the backend can offer, plus recents. */
 export const FoldersList = intent("folders.list", { under: z.string().optional() });
+/** §10 the + picker's / and ! tabs. */
+export const SkillsList = intent("skills.list", {});
+/** An image pasted or chosen in the ! tab, saved into the session's img/ folder. */
+export const ImageAdd = intent("image.add", {
+  sessionId: z.string(),
+  name: z.string(),
+  /** base64, without the data: prefix. */
+  data: z.string(),
+});
 export const FsRead = intent("fs.read", { path: z.string() });
 /** `baseHash` is the hash the editor loaded; a mismatch means the file changed underneath. */
 export const FsWrite = intent("fs.write", {
@@ -112,7 +121,7 @@ export const Intent = z.discriminatedUnion("type", [
   SessionSend, SessionCancel, SessionRewind, SessionDropGroup, SessionDropToolOutput,
   SessionCompact, SessionCompactPlan, SessionClear,
   PermissionAnswerIntent, AskAnswer, FilesShown, OptionsSet,
-  JobKill, FsList, FsTree, FoldersList, FsRead, FsWrite, FsMkdir, FsRename, FsCopy, FsMove, FsDelete,
+  JobKill, FsList, FsTree, FoldersList, SkillsList, ImageAdd, FsRead, FsWrite, FsMkdir, FsRename, FsCopy, FsMove, FsDelete,
   GitStatus, GitLog, GitDiff, GitCommit, GitCheckout,
   WorkspaceSet, WorkspaceGet, ViewerList, ViewerInstall,
 ]);

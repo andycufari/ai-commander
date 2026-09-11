@@ -203,6 +203,13 @@ html, body, #root {
 .modal.warning .modal-command { border-left-color: var(--amber); }
 .modal-reason { color: var(--dim); }
 
+/* the + picker's four tabs (§10) */
+.picker-tabs { display: flex; gap: 14px; margin-bottom: 2px; }
+.picker-tab { color: var(--dim); cursor: pointer; }
+.picker-tab b { color: var(--amber); font-weight: 500; margin-right: 2px; }
+.picker-tab.on { color: var(--hi); }
+.picker-tab.on b { color: var(--hi); }
+
 /* pick — info frame with a filterable list (v2 "the other three shapes") */
 .pick { display: flex; flex-direction: column; gap: 6px; width: 560px; }
 .pick-filter {
@@ -260,6 +267,22 @@ html, body, #root {
 .nav-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-meta { color: var(--dim); white-space: nowrap; }
 .nav-row.sel .nav-meta { color: var(--hi); }
+
+/* context inspector (§12 M3) — read-only */
+.body.inspector { outline: none; padding: 2px 4px; }
+.insp-head, .insp-row, .insp-total {
+  display: grid;
+  grid-template-columns: minmax(0, 10em) minmax(0, 26ch) minmax(0, 7em) minmax(0, 4em) minmax(0, 1fr);
+  gap: 10px; white-space: nowrap;
+}
+.insp-head { color: var(--dim); border-bottom: 1px solid var(--line); padding-bottom: 2px; }
+.insp-total { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 2px; color: var(--dim); }
+.insp-name { color: var(--ink); }
+.insp-bar { color: var(--hi); }
+.insp-size, .insp-share { text-align: right; color: var(--dim); }
+.insp-detail { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.insp-tokens { margin-top: 12px; }
+.insp-ctx { color: var(--amber); margin-top: 4px; }
 
 /* log view — a background job's output (§10) */
 .body.log { outline: none; white-space: pre-wrap; overflow-wrap: anywhere; }

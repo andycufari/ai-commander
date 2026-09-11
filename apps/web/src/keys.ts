@@ -41,6 +41,8 @@ export const BINDINGS: Binding[] = [
   { id: "touched", label: "touched", hint: "⌘⇧P", chord: { key: "p", mod: true, shift: true } },
   { id: "menu", label: "menu", hint: "⌘K", chord: { key: "k", mod: true } },
   { id: "settings", label: "settings", hint: "⌘,", chord: { key: ",", mod: true } },
+  { id: "system", label: "system", hint: "⌘⇧M", chord: { key: "m", mod: true, shift: true } },
+  { id: "context", label: "context", hint: "⌘I", chord: { key: "i", mod: true } },
   { id: "openFolder", label: "open", hint: "⌘O", chord: { key: "o", mod: true } },
   { id: "collapse", label: "collapse", hint: "⌘B", chord: { key: "b", mod: true } },
   { id: "maximize", label: "maximize", hint: "⌘⇧↵", chord: { key: "Enter", mod: true, shift: true } },
@@ -79,6 +81,6 @@ export function barFor(view: string | undefined): Binding[] {
     ? ["help", "menu", "file", "openFolder", "collapse", "maximize", "newTab", "closeTab", "settings"]
     : view === "editor" || view === "viewer"
       ? ["help", "menu", "file", "touched", "collapse", "maximize", "closeTab", "settings"]
-      : ["help", "menu", "attach", "file", "touched", "sessions", "compact", "clear", "settings"];
+      : ["help", "menu", "attach", "file", "touched", "sessions", "context", "compact", "settings"];
   return ids.map(byId).filter((b): b is Binding => b !== undefined);
 }

@@ -9,6 +9,13 @@ import type {
  * so this keeps just enough to draw the screen and rebuilds it from events on reconnect.
  */
 
+/** One layer of the assembled context (§7), as the inspector shows it. */
+export interface Layer {
+  name: string;
+  chars: number;
+  detail?: string;
+}
+
 export interface ChatRow {
   kind: "user" | "brain" | "tool";
   text: string;
@@ -61,6 +68,10 @@ export interface UiState {
   snapshots: string[];
   /** What the last snapshot cost, for the status line. */
   lastSnapshot?: { bytes: number; ms: number };
+  /** §12 M3: the layers of the last assembled context, for the inspector. */
+  layers: Layer[];
+  /** Prompt tokens the endpoint charged, never a local estimate. */
+  promptTokens?: number;
   /** Bumped by fs.changed, so the files view re-lists. */
   revision: number;
   /**
@@ -88,6 +99,7 @@ export const initialState: UiState = {
   jobs: {},
   snapshots: [],
   groups: [],
+  layers: [],
 };
 
 /** Local echo: the backend's turn.start carries no text, so a sent message would not
@@ -209,6 +221,15 @@ export function reduce(state: UiState, event: Event): UiState {
         },
       };
     }
+
+    case "context":
+      return {
+        ...state,
+        layers: event.layers,
+        // Only replace the count when the endpoint sent one; the first event of a turn
+        // carries the layers alone.
+        promptTokens: event.promptTokens ?? state.promptTokens,
+      };
 
     case "snapshot":
       return {

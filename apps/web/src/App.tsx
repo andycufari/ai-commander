@@ -15,6 +15,8 @@ import { Modal, type ModalButton } from "./Modal.js";
 import { LogView, jobStatus } from "./LogView.js";
 import { Navigator, type NavAction } from "./Navigator.js";
 import { Options } from "./Options.js";
+import { Picker, type PickerTab } from "./Picker.js";
+import { Inspector } from "./Inspector.js";
 import { modalOpen, unlessModal, useModalLock } from "./modal-stack.js";
 import { toPatch, toRuntimeTabs } from "./restore.js";
 import type { Attachment } from "@aicommander/protocol";
@@ -105,6 +107,14 @@ function permissionButtons(tier: "info" | "warning" | "danger"): ModalButton[] {
     { id: "deny", label: "deny", letter: "d", isSafe: true },
   ];
 }
+
+/** §5 special tools, opt-in per session with `#`. */
+const SPECIAL_TOOLS = [
+  { name: "sql", description: "query .aicommander/data.sqlite", enabled: false },
+  { name: "comfyui", description: "run a ComfyUI workflow", enabled: false },
+  { name: "cad_render", description: "render a CAD file to STL or PNG", enabled: false },
+  { name: "circuit_export", description: "export a KiCad schematic to SVG", enabled: false },
+];
 
 /** §11 slash commands. Anything needing M2/M3 machinery says so rather than
  *  silently doing nothing. */
@@ -299,6 +309,15 @@ export function App(): JSX.Element {
     return { outcome: "opened", side, view };
   }, [left, right, targetSideFor]);
 
+  /** Open a non-file view in the panel that is not showing the chat. */
+  const openView = useCallback((view: "inspector", title: string) => {
+    const side = targetSideFor();
+    const host = side === "left" ? left : right;
+    const existing = host.tabs.find((t) => t.view === view);
+    if (existing) host.select(existing.id);
+    else host.open({ view, title });
+  }, [left, right, targetSideFor]);
+
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
 
@@ -365,6 +384,10 @@ export function App(): JSX.Element {
   /** Groups whose truncate is waiting on a warning modal. */
   const [confirmTruncate, setConfirmTruncate] = useState<string | undefined>();
   const [optionsScope, setOptionsScope] = useState<"session" | "project" | "global">("project");
+  const [pickerTab, setPickerTab] = useState<PickerTab>("files");
+  const [skills, setSkills] = useState<{ name: string; description: string }[]>([]);
+  const [images, setImages] = useState<{ file: string; name: string }[]>([]);
+  const skillsWarned = useRef(false);
   const [compactPlan, setCompactPlan] = useState<
     { groups: number; before: number; after: number; files: string[] } | undefined
   >();
@@ -398,7 +421,7 @@ export function App(): JSX.Element {
 
   /** Which pick modal is open, if any (§11). */
   const [pick, setPick] = useState<
-    "menu" | "files" | "touched" | "sessions" | "settings" | "folders" | "help" | null
+    "menu" | "files" | "touched" | "sessions" | "settings" | "folders" | "help" | "attach" | null
   >(null);
   const [tree, setTree] = useState<string[]>([]);
 
@@ -416,6 +439,35 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (state.connected) loadTree();
   }, [state.connected, loadTree]);
+
+  /**
+   * The ! tab. A hidden input is the only way to reach the system file chooser from a
+   * browser; Tauri will swap in the native dialog behind the same call.
+   */
+  const pickImageFile = useCallback(() => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/png,image/jpeg,image/gif,image/webp";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file || !state.sessionId) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const data = String(reader.result).split(",")[1] ?? "";
+        conn.current?.request(
+          { type: "image.add", sessionId: state.sessionId!, name: file.name, data },
+          "image.added",
+        ).then((e) => {
+          const added = e as unknown as { file: string; name: string };
+          setImages((prev) => [...prev, added]);
+          mention([{ kind: "image", file: added.file }]);
+          setPick(null);
+        }).catch((err: Error) => toast("warning", err.message));
+      };
+      reader.readAsDataURL(file);
+    };
+    input.click();
+  }, [state.sessionId, toast]);
 
   /** Open a picked file: ⏎ here (the focused panel), ⌘⏎ the other one (§11). */
   const openPicked = useCallback((path: string, other: boolean) => {
@@ -474,7 +526,20 @@ export function App(): JSX.Element {
           .catch(() => toast("warning", "could not work out what compacting would do"));
         return;
       case "attach":
-        toast("info", "the + picker arrives in M3 — use @ in the prompt, or ⌘P");
+        loadTree();
+        conn.current?.request({ type: "skills.list" }, "skills.listed")
+          .then((e) => {
+            const reply = e as unknown as { skills: typeof skills; skipped: string[] };
+            setSkills(reply.skills);
+            // Said once: a skill the user never looks at should not nag every time.
+            if (reply.skipped.length && !skillsWarned.current) {
+              skillsWarned.current = true;
+              toast("warning",
+                `${reply.skipped.join(", ")}: no description in SKILL.md frontmatter, so not indexed`);
+            }
+          })
+          .catch(() => setSkills([]));
+        setPick("attach");
         return;
       case "rewind":
         setNavOpen(true);
@@ -506,10 +571,21 @@ export function App(): JSX.Element {
         return;
       }
       case "collapse": layoutRef.current.toggleCollapse(); return;
+      case "context":
+        // The inspector goes in the panel that is not holding the chat, like any view.
+        openView("inspector", "context");
+        return;
+      case "system":
+        openFile(".aicommander/system.md", { mode: "edit" });
+        return;
       case "maximize": layoutRef.current.toggleMaximize(layoutRef.current.focus); return;
+      // Each of these has its own handler in runCommand; grouping them under one
+      // label is how attach silently became "open the navigator".
       case "attach":
       case "compact":
       case "clear":
+        runCommandRef.current(id);
+        return;
       case "rewind":
         setNavOpen(true);
         return;
@@ -520,6 +596,8 @@ export function App(): JSX.Element {
 
   const runActionRef = useRef(runAction);
   runActionRef.current = runAction;
+  const runCommandRef = useRef(runCommand);
+  runCommandRef.current = runCommand;
 
   // Global keys (§11). Chords are ⌘-based; see keys.ts for why not F-keys.
   useEffect(() => {
@@ -638,6 +716,15 @@ export function App(): JSX.Element {
             focused={layout.focus === side}
             revision={state.fileRevisions[tab.path ?? ""] ?? 0}
             onEscape={focusChat}
+          />
+        );
+      case "inspector":
+        return (
+          <Inspector
+            layers={state.layers}
+            promptTokens={state.promptTokens}
+            ctxMax={state.ctxMax}
+            focused={layout.focus === side}
           />
         );
       case "log":
@@ -938,7 +1025,24 @@ export function App(): JSX.Element {
           onClose={() => setPick(null)}
         />
       )}
-            {pick === "settings" && state.config && (
+            {pick === "attach" && (
+        <Picker
+          tab={pickerTab}
+          onTab={setPickerTab}
+          files={tree}
+          skills={skills}
+          tools={SPECIAL_TOOLS}
+          images={images}
+          onAttach={(attachment, alsoOpen) => {
+            mention([attachment]);
+            if (alsoOpen && attachment.kind === "file") openFile(attachment.path);
+            setPick(null);
+          }}
+          onUpload={() => pickImageFile()}
+          onClose={() => setPick(null)}
+        />
+      )}
+      {pick === "settings" && state.config && (
         <Options
           config={state.config}
           scope={optionsScope}

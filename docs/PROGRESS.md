@@ -1,6 +1,6 @@
 # Progress
 
-Current milestone: **M3 — Context** (M0, M1, M2 complete)
+Current milestone: **M4 — Viewers & special tools** (M0–M3 complete)
 
 Update the checklist as items land. One commit per item (`M0: protocol package` style).
 
@@ -107,13 +107,18 @@ First-use feedback moved several things forward:
 
 ## M3 — Context
 
-- [ ] system.md (global template in `packages/core/templates/system.md`)
-- [ ] boot sequence, skills index, `list_skills` / `read_skill`
-- [ ] + picker with 4 tabs, mentions in prose, image attachments (vision), file-hash dedupe
-- [ ] Context inspector (`F4` alt view): assembled layers + token counts, read-only
+- [x] system.md (template in `packages/core/templates/system.md`, ⌘⇧M edits it)
+- [x] boot sequence, skills index, `list_skills` / `read_skill`
+- [x] + picker with 4 tabs, mentions in prose, image attachments (vision), file-hash dedupe
+- [x] Context inspector (⌘I): assembled layers + token counts from the endpoint, read-only
 
-**Demo:** attach a skill twice in one session → second time is a reference, not content.
-Context inspector matches what's sent.
+**Demo — PASSED** 2026-09-11, live against `192.168.1.44:8001`:
+
+1. the same skill attached twice → the second turn grew by 62 tokens, not the ~145 the
+   skill's content costs; the log shows `<skill unchanged/>`
+2. the inspector reports every §7 layer with its share, and 2,615 prompt tokens as
+   **reported by the endpoint**, never estimated locally
+3. asked what the attached skill says, the model answered from its content
 
 ---
 

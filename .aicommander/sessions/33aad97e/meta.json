@@ -1,0 +1,25 @@
+{
+  "id": "33aad97e",
+  "name": "session 33aad97e",
+  "model": "local-brain",
+  "created": 1789148682750,
+  "snapshots": [
+    {
+      "groupId": "gmtx8y4qb",
+      "gitRef": "refs/aicommander/33aad97e-gmtx8y4qb"
+    },
+    {
+      "groupId": "gmtx8ytbc",
+      "gitRef": "refs/aicommander/33aad97e-gmtx8ytbc"
+    },
+    {
+      "groupId": "gmtx8yy3q",
+      "gitRef": "refs/aicommander/33aad97e-gmtx8yy3q"
+    },
+    {
+      "groupId": "gmtx90tqi",
+      "gitRef": "refs/aicommander/33aad97e-gmtx90tqi"
+    }
+  ],
+  "specialTools": []
+}

@@ -24,6 +24,7 @@ async function readRecents(): Promise<string[]> {
 import { resolveInRoot, toRepoPath } from "./paths.js";
 import { globFiles } from "./tools.js";
 import { groupOf, SessionStore } from "./sessions.js";
+import { readSkills } from "./boot.js";
 import { pruneSnapshots, restoreSnapshot } from "./snapshots.js";
 import { compactSession, planCompact } from "./compact.js";
 import type { Loop } from "./loop.js";
@@ -64,6 +65,21 @@ const ev = <T extends Event["type"]>(type: T, payload: Omit<Extract<Event, { typ
   ({ id: randomUUID(), type, ...payload }) as Extract<Event, { type: T }>;
 
 const hash = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 16);
+
+/**
+ * What kind of image this is, by its magic bytes. The extension is whatever the user's
+ * file happened to be called; the bytes are what the viewer has to render.
+ */
+function imageKind(bytes: Buffer): string | undefined {
+  if (bytes.length < 12) return undefined;
+  if (bytes[0] === 0x89 && bytes.subarray(1, 4).toString() === "PNG") return "png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return "jpg";
+  if (bytes.subarray(0, 3).toString() === "GIF") return "gif";
+  if (bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP") {
+    return "webp";
+  }
+  return undefined;
+}
 
 export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
   switch (intent.type) {
@@ -379,6 +395,34 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
         ],
         under: base,
       }));
+      return;
+    }
+
+    case "skills.list": {
+      const { skills, skipped } = await readSkills(ctx.root);
+      ctx.send(ev("skills.listed", { intentId: intent.id, skills, skipped }));
+      return;
+    }
+
+    case "image.add": {
+      // Images live with the session that used them (§4), so a deleted session takes
+      // its images with it and nothing is orphaned in the repo.
+      const dir = join(projectDir(ctx.root), "sessions", intent.sessionId, "img");
+      await mkdir(dir, { recursive: true });
+
+      const clean = basename(intent.name).replace(/[^\w.-]/g, "_");
+      if (clean !== intent.name && intent.name.includes("/")) {
+        throw new Error("an image name cannot contain a path");
+      }
+      const bytes = Buffer.from(intent.data, "base64");
+      const kind = imageKind(bytes);
+      if (!kind) throw new Error("that file is not an image the viewer can show");
+
+      // Two screenshots called Screenshot.png are two different images.
+      const stem = clean.replace(/\.[^.]*$/, "") || "image";
+      const file = `${stem}-${randomUUID().slice(0, 6)}.${kind}`;
+      await writeFile(join(dir, file), bytes);
+      ctx.send(ev("image.added", { intentId: intent.id, file: `img/${file}`, name: clean }));
       return;
     }
 
