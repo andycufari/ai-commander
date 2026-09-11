@@ -1,0 +1,13 @@
+{
+  "id": "c56378fe",
+  "name": "session c56378fe",
+  "model": "local-brain",
+  "created": 1789147249426,
+  "snapshots": [
+    {
+      "groupId": "gmtx82vgf",
+      "gitRef": "refs/aicommander/c56378fe-gmtx82vgf"
+    }
+  ],
+  "specialTools": []
+}

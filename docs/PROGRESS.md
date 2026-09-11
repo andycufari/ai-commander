@@ -1,6 +1,6 @@
 # Progress
 
-Current milestone: **M2 — Loop hardening** (M0, M1 complete)
+Current milestone: **M3 — Context** (M0, M1, M2 complete)
 
 Update the checklist as items land. One commit per item (`M0: protocol package` style).
 
@@ -92,8 +92,16 @@ First-use feedback moved several things forward:
 - [x] Compact (manual + auto nudge), clear, queue/steer
 - [~] Modal system: info/warning/danger + input/pick/form + toasts (progress bar pending)
 
-**Demo:** `rm -rf` blocked in auto mode; `npm run dev` becomes a job; repeat grep ×3 pauses;
-rewind restores a deleted file; queued message lands at next tool boundary.
+**Demo — PASSED** 2026-09-11, live against `192.168.1.44:8001`, through the browser UI:
+
+1. `rm -rf VICTIM.txt` in **auto** mode → danger modal with no Enter default; Esc denied
+   it, the file survived, and the model was told why in the rule's own words
+2. a 12-second command → detached at the timeout, kept running, streamed into its own
+   log tab while the model polled it with `job status` on its own initiative
+3. the same `glob` three times → guard 1 paused with continue / stop / tell it something
+4. a file written `original`, overwritten `destroyed`, rewound → back to `original`
+5. a message typed mid-loop → `1 queued`, landed at the next tool boundary, and the
+   brain answered the revised question rather than the original
 
 ---
 

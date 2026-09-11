@@ -1,0 +1,205 @@
+    1  import { z } from "zod";
+    2  import { Config } from "./config.js";
+    3  import { RuleLevel } from "./rules.js";
+    4  import { Group, SessionMeta, SessionStatus } from "./session.js";
+    5  import { GitAction, ToolResult } from "./tools.js";
+    6  import { PanelTarget, Workspace } from "./workspace.js";
+    7  
+    8  /** §3 server → client. `{ id, type, ...payload }`; `id` is unique per event. */
+    9  
+   10  const event = <T extends string, S extends z.ZodRawShape>(type: T, shape: S) =>
+   11    z.object({ id: z.string(), type: z.literal(type), ...shape });
+   12  
+   13  /** §6 guard 6: what the snapshot before this turn cost, for the status line. */
+   14  export const SnapshotTaken = event("snapshot", {
+   15    sessionId: z.string(),
+   16    groupId: z.string(),
+   17    ref: z.string(),
+   18    bytes: z.number().int().nonnegative(),
+   19    ms: z.number().int().nonnegative(),
+   20  });
+   21  
+   22  export const SessionStateEvent = event("session.state", {
+   23    sessionId: z.string(),
+   24    status: SessionStatus,
+   25    ctxUsed: z.number().int().nonnegative(),
+   26    ctxMax: z.number().int().positive(),
+   27    toolCount: z.number().int().nonnegative(),
+   28    elapsed: z.number().nonnegative(),
+   29    /** Set while a message is waiting for the next tool boundary (guard 5). */
+   30    queued: z.string().optional(),
+   31  });
+   32  
+   33  export const TurnStart = event("turn.start", {
+   34    sessionId: z.string(),
+   35    groupId: z.string(),
+   36    role: z.enum(["user", "brain"]),
+   37  });
+   38  /** Streaming brain text. */
+   39  export const Token = event("token", {
+   40    sessionId: z.string(),
+   41    groupId: z.string(),
+   42    delta: z.string(),
+   43  });
+   44  
+   45  export const ToolStart = event("tool.start", {
+   46    sessionId: z.string(),
+   47    groupId: z.string(),
+   48    callId: z.string(),
+   49    name: z.string(),
+   50    args: z.record(z.unknown()),
+   51  });
+   52  /** Streaming shell output, keyed by callId alone. */
+   53  export const ToolOutput = event("tool.output", { callId: z.string(), delta: z.string() });
+   54  export const ToolEnd = event("tool.end", {
+   55    callId: z.string(),
+   56    ok: z.boolean(),
+   57    summary: z.string(),
+   58    outputPath: z.string().optional(),
+   59    truncated: z.boolean().default(false),
+   60  });
+   61  
+   62  export const PermissionRequest = event("permission.request", {
+   63    requestId: z.string(),
+   64    sessionId: z.string(),
+   65    tool: z.string(),
+   66    command: z.string(),
+   67    rule: z.string(),
+   68    reason: z.string(),
+   69    level: RuleLevel.default("danger"),
+   70  });
+   71  export const AskRequest = event("ask.request", {
+   72    requestId: z.string(),
+   73    sessionId: z.string(),
+   74    question: z.string(),
+   75    options: z.array(z.string()).min(1),
+   76  });
+   77  
+   78  /** Background shell jobs (guard 4). */
+   79  export const JobStart = event("job.start", { jobId: z.string(), sessionId: z.string(), cmd: z.string() });
+   80  export const JobOutput = event("job.output", { jobId: z.string(), delta: z.string() });
+   81  export const JobEnd = event("job.end", { jobId: z.string(), code: z.number().int().nullable(), killed: z.boolean().default(false) });
+   82  
+   83  /** §5 show_files: the app routes each path through the viewer registry itself. */
+   84  export const ShowFiles = event("show_files", {
+   85    paths: z.array(z.string()).min(1),
+   86    target: PanelTarget.default("other"),
+   87    /** The UI answers with files.shown so the tool result says what actually happened. */
+   88    requestId: z.string().optional(),
+   89  });
+   90  /** Viewer or files view pushing text into the prompt. */
+   91  export const MentionAdd = event("mention.add", { text: z.string() });
+   92  
+   93  export const FsChanged = event("fs.changed", { paths: z.array(z.string()) });
+   94  export const GitChanged = event("git.changed", {
+   95    branch: z.string(),
+   96    dirty: z.number().int().nonnegative(),
+   97    ahead: z.number().int().nonnegative(),
+   98  });
+   99  
+  100  export const Toast = event("toast", { level: z.enum(["info", "warning"]), text: z.string() });
+  101  /** Reply to session.compactPlan: what a compaction would cost, before doing it. */
+  102  export const CompactPlanned = event("compact.plan", {
+  103    intentId: z.string(),
+  104    sessionId: z.string(),
+  105    /** Groups that would be summarised away. */
+  106    groups: z.number().int().nonnegative(),
+  107    before: z.number().int().nonnegative(),
+  108    after: z.number().int().nonnegative(),
+  109    files: z.array(z.string()),
+  110  });
+  111  export const CompactDone = event("compact.done", {
+  112    sessionId: z.string(),
+  113    before: z.number().int(),
+  114    after: z.number().int(),
+  115    summaryPath: z.string(),
+  116  });
+  117  export const WorkspaceEvent = event("workspace", { workspace: Workspace });
+  118  export const ErrorEvent = event("error", { intentId: z.string().optional(), message: z.string() });
+  119  
+  120  /** Replies the UI needs for its own intents — the spec's §3 list covers the loop;
+  121   *  these carry the data an intent asked for. */
+  122  export const FsEntry = z.object({
+  123    name: z.string(),
+  124    path: z.string(),
+  125    dir: z.boolean(),
+  126    size: z.number().int().nonnegative(),
+  127    mtime: z.number().int(),
+  128  });
+  129  export type FsEntry = z.infer<typeof FsEntry>;
+  130  
+  131  export const FsListed = event("fs.listed", { intentId: z.string(), path: z.string(), entries: z.array(FsEntry) });
+  132  export const FsContent = event("fs.content", {
+  133    intentId: z.string(),
+  134    path: z.string(),
+  135    content: z.string(),
+  136    hash: z.string(),
+  137  });
+  138  /** Reply to fs.write: confirms the write and returns the hash of what is now on disk,
+  139   *  so an editor can re-base its buffer without a second round trip. */
+  140  /** Reply to fs.tree: repo-relative file paths, already sorted. */
+  141  export const FsTreeListed = event("fs.tree", {
+  142    intentId: z.string(),
+  143    paths: z.array(z.string()),
+  144    truncated: z.boolean().default(false),
+  145  });
+  146  /** Reply to folders.list (§10 open folder). */
+  147  export const FoldersListed = event("folders.listed", {
+  148    intentId: z.string(),
+  149    /** Absolute paths, recents first. */
+  150    folders: z.array(z.object({
+  151      path: z.string(),
+  152      recent: z.boolean().default(false),
+  153      /** True when it already has a .aicommander directory. */
+  154      known: z.boolean().default(false),
+  155    })),
+  156    /** Where the non-recent entries were listed from. */
+  157    under: z.string(),
+  158  });
+  159  export const FsWrote = event("fs.wrote", {
+  160    intentId: z.string(),
+  161    path: z.string(),
+  162    hash: z.string(),
+  163  });
+  164  export const GitResult = event("git.result", {
+  165    intentId: z.string(),
+  166    action: GitAction,
+  167    text: z.string(),
+  168  });
+  169  /** Full session list + replayed log, sent on open and on reconnect. */
+  170  export const SessionList = event("session.list", { sessions: z.array(SessionMeta) });
+  171  export const TouchedFile = z.object({
+  172    path: z.string(),
+  173    kind: z.enum(["written", "read", "mentioned"]),
+  174    ts: z.number().int(),
+  175  });
+  176  export type TouchedFile = z.infer<typeof TouchedFile>;
+  177  
+  178  export const SessionEvents = event("session.events", {
+  179    sessionId: z.string(),
+  180    meta: SessionMeta,
+  181    groups: z.array(Group),
+  182    /** Files this session has touched, for the ⌃⇧P modal (§11). Writes first. */
+  183    touched: z.array(TouchedFile).default([]),
+  184  });
+  185  /** Sent on connect: the merged config plus what the shell's top line needs (§10). */
+  186  export const ConfigEvent = event("config", {
+  187    config: Config,
+  188    /** Absolute repo root; the top line shows it with $HOME collapsed to ~. */
+  189    root: z.string(),
+  190  });
+  191  
+  192  export const Event = z.discriminatedUnion("type", [
+  193    SessionStateEvent, SnapshotTaken, TurnStart, Token,
+  194    ToolStart, ToolOutput, ToolEnd,
+  195    PermissionRequest, AskRequest,
+  196    JobStart, JobOutput, JobEnd,
+  197    ShowFiles, MentionAdd, FsChanged, GitChanged,
+  198    Toast, CompactDone, CompactPlanned, WorkspaceEvent, ErrorEvent,
+  199    FsListed, FsTreeListed, FoldersListed, FsContent, FsWrote, GitResult, SessionList, SessionEvents, ConfigEvent,
+  200  ]);
+  201  export type Event = z.infer<typeof Event>;
+  202  export type EventType = Event["type"];
+  203  export type EventOf<T extends EventType> = Extract<Event, { type: T }>;
+  204  
+  205  export type { ToolResult };
