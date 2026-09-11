@@ -2,16 +2,30 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import type { Event, PanelSide, Tab } from "@aicommander/protocol";
 import { connect, echoUser, initialState, reduce, type ChatRow, type Connection, type UiState } from "./ws.js";
 import { GUTTER_STEP, useGutterDrag, usePanelLayout } from "./panels.js";
-import { keysFor, usePanelTabs, type FKeySet, type PanelTabs } from "./tabs.js";
+import { usePanelTabs, type PanelTabs } from "./tabs.js";
+import { BINDINGS, barFor, hasMod, resolve, resolveLeader, type Binding } from "./keys.js";
 import { FilesView } from "./FilesView.js";
 import { Editor } from "./Editor.js";
 import { ImageViewer } from "./ImageViewer.js";
 import { defaultRegistry } from "./viewers.js";
-import { addChips, removeChip, type Chip } from "./chips.js";
+import { addChips, fileAttachment, removeChip, type Chip } from "./chips.js";
 import { linkifyMentions } from "./mentions.js";
-import { Pick, type PickItem } from "./Pick.js";
+import { Pick, defaultFilter, type PickItem } from "./Pick.js";
 import { toPatch, toRuntimeTabs } from "./restore.js";
 import type { Attachment } from "@aicommander/protocol";
+
+/** §11 slash commands. Anything needing M2/M3 machinery says so rather than
+ *  silently doing nothing. */
+const COMMANDS: { name: string; detail: string }[] = [
+  { name: "clear", detail: "empty this session" },
+  { name: "compact", detail: "summarise the older turns" },
+  { name: "new", detail: "new session" },
+  { name: "model", detail: "brain and endpoint" },
+  { name: "files", detail: "open a file" },
+  { name: "touched", detail: "files this session touched" },
+  { name: "help", detail: "every key" },
+  { name: "rewind", detail: "M2" },
+];
 
 /** The shell: top line, two tabbed panels with a draggable gutter, status line,
  *  and a context-relative F-bar. The files view lands in the next M1 step. */
@@ -134,20 +148,39 @@ export function App(): JSX.Element {
   }, [left, right, layout]);
 
   /**
-   * Open a file in a panel — the single code path for ⏎ in the files view, a click on
-   * a mention, and the brain's open_in_panel (§5). It always targets the panel that is
-   * *not* the source, never moves focus, and activates an existing tab for the same
-   * path rather than opening a second one.
+   * Where a file should open.
+   *
+   * Not "the panel you are not focused on" — that rule put files on top of the chat
+   * whenever the user was working in the other panel. A file goes to the panel whose
+   * *active tab is not a chat*, so a conversation is never buried by something the
+   * brain wanted to show. Only when both sides are showing chats does it fall back to
+   * the side away from focus.
+   */
+  const targetSideFor = useCallback((prefer?: PanelSide): PanelSide => {
+    if (prefer) return prefer;
+    const leftIsChat = left.active?.view === "chat";
+    const rightIsChat = right.active?.view === "chat";
+    if (leftIsChat && !rightIsChat) return "right";
+    if (rightIsChat && !leftIsChat) return "left";
+    if (leftIsChat && rightIsChat) return layoutRef.current.focus === "left" ? "right" : "left";
+    // Neither side holds a chat: reuse whichever already has this kind of thing open,
+    // which in practice means the panel the user has been reading in.
+    return right.tabs.length >= left.tabs.length ? "right" : "left";
+  }, [left, right]);
+
+  /**
+   * Open a file — the single code path for ⏎ in the files view, a mention click, a
+   * pick, and the brain's show_files (§5). Never moves focus, and activates an existing
+   * tab for the same path rather than opening a second one.
    */
   const openFile = useCallback((
-    fromSide: PanelSide,
     path: string,
-    mode?: "view" | "edit",
+    opts: { mode?: "view" | "edit"; side?: PanelSide } = {},
   ): { outcome: "opened" | "already-open"; side: PanelSide; view: string } => {
     const entry = defaultRegistry.resolve(path);
     // mode "edit" overrides the registry's choice of a rendered view (§5).
-    const view = mode === "edit" ? "editor" : entry.view;
-    const side: PanelSide = fromSide === "left" ? "right" : "left";
+    const view = opts.mode === "edit" ? "editor" : entry.view;
+    const side = targetSideFor(opts.side);
     const target = side === "left" ? left : right;
 
     const existing = target.tabs.find((t) => t.path === path && t.view === view);
@@ -160,10 +193,10 @@ export function App(): JSX.Element {
       title: path.split("/").pop() ?? path,
       path,
       viewer: entry.name,
-      mode: mode ?? entry.mode,
+      mode: opts.mode ?? entry.mode,
     });
     return { outcome: "opened", side, view };
-  }, [left, right]);
+  }, [left, right, targetSideFor]);
 
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
@@ -177,13 +210,11 @@ export function App(): JSX.Element {
     onShowFiles: (e) => {
       // `target` names where the files should land, but openFile opens *away* from the
       // side it is given — so pass the opposite. "other" means away from focus.
-      const source: PanelSide = e.target === "left" ? "right"
-        : e.target === "right" ? "left"
-        : layoutRef.current.focus;
+      const side = e.target === "other" ? undefined : e.target;
       // Opened in order, so the last path ends up active — the brain's final argument
       // is the one it most wants seen.
       const results = e.paths.map((path) => {
-        const r = openFile(source, path);
+        const r = openFile(path, { side });
         return { path, outcome: r.outcome, view: r.view };
       });
       // Tell the loop what actually happened, so its tool result is truthful (§5).
@@ -192,7 +223,7 @@ export function App(): JSX.Element {
           type: "files.shown",
           requestId: e.requestId,
           results,
-          side: results[0] ? (source === "left" ? "right" : "left") : undefined,
+          side: results[0]?.outcome ? targetSideFor(side) : undefined,
         });
       }
     },
@@ -221,10 +252,12 @@ export function App(): JSX.Element {
   ]);
 
   /** Which pick modal is open, if any (§11). */
-  const [pick, setPick] = useState<"menu" | "files" | "touched" | "sessions" | null>(null);
+  const [pick, setPick] = useState<
+    "menu" | "files" | "touched" | "sessions" | "settings" | "folders" | "help" | null
+  >(null);
   const [tree, setTree] = useState<string[]>([]);
 
-  /** ⌃P needs the file list; fetch it lazily and keep it for the session. */
+  /** The file list backs both ⌘P and @ completion; load it as soon as we connect. */
   const loadTree = useCallback(() => {
     conn.current?.request({ type: "fs.tree", limit: 5000 }, "fs.tree")
       .then((e) => setTree((e as { paths: string[] }).paths))
@@ -235,86 +268,161 @@ export function App(): JSX.Element {
     conn.current?.send({ type: "session.create" });
   }, []);
 
-  /** Open a picked file: ⏎ here (focused panel), ⌃⏎ the other one (§11). */
+  useEffect(() => {
+    if (state.connected) loadTree();
+  }, [state.connected, loadTree]);
+
+  /** Open a picked file: ⏎ here (the focused panel), ⌘⏎ the other one (§11). */
   const openPicked = useCallback((path: string, other: boolean) => {
-    // openFile opens away from the side it is given, so "here" passes the other side.
     const focus = layoutRef.current.focus;
-    openFileRef.current(other ? focus : (focus === "left" ? "right" : "left"), path);
+    const side = other ? (focus === "left" ? "right" : "left") : focus;
+    openFileRef.current(path, { side });
     setPick(null);
   }, []);
 
-  // Global keys (§11): Tab swaps focus, ⌃←/→ resizes, ⌃B collapses, Esc cancels.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape" && state.status === "running") {
-        e.preventDefault();
-        cancel();
+  const focusedRef = useRef(focused);
+  focusedRef.current = focused;
+
+  /** Folder list for ⌘O (§10 open folder). */
+  const [folders, setFolders] = useState<{ path: string; recent: boolean }[]>([]);
+  const loadFolders = useCallback(() => {
+    conn.current?.request({ type: "folders.list" }, "folders.listed")
+      .then((e) => setFolders((e as unknown as { folders: { path: string; recent: boolean }[] }).folders))
+      .catch(() => setFolders([]));
+  }, []);
+
+  /**
+   * Slash commands and their keyboard equivalents (§11). Everything that needs the
+   * context assembler or the permission engine is M2/M3; those say so rather than
+   * silently doing nothing, which is worse than an honest "not yet".
+   */
+  const runCommand = useCallback((id: string, arg?: string): void => {
+    const sessionId = state.sessionId;
+    switch (id) {
+      case "clear":
+        if (sessionId) conn.current?.send({ type: "session.clear", sessionId });
+        return;
+      case "new":
+      case "newSession":
+        newSession();
+        return;
+      case "model":
+      case "settings":
+        setPick("settings");
+        return;
+      case "help":
+        setPick("help");
+        return;
+      case "files":
+        loadTree();
+        setPick("files");
+        return;
+      case "touched":
+        setPick("touched");
+        return;
+      case "compact":
+        if (sessionId) conn.current?.send({ type: "session.compact", sessionId });
+        return;
+      case "attach":
+        toast("info", "the + picker arrives in M3 — use @ in the prompt, or ⌘P");
+        return;
+      case "rewind":
+        toast("info", "rewind arrives in M2");
+        return;
+      default:
+        toast("warning", `unknown command: /${id}`);
+    }
+  }, [state.sessionId, newSession, loadTree, toast]);
+
+  /** ⌘K leader: the next key picks an action (§11). */
+  const [leaderArmed, setLeaderArmed] = useState(false);
+
+  const runAction = useCallback((id: string) => {
+    switch (id) {
+      case "help": setPick("help"); return;
+      case "menu": setPick("menu"); return;
+      case "file": loadTree(); setPick("files"); return;
+      case "touched": setPick("touched"); return;
+      case "sessions": setPick("sessions"); return;
+      case "settings": setPick("settings"); return;
+      case "openFolder": loadFolders(); setPick("folders"); return;
+      case "newSession": newSession(); return;
+      case "newTab": focusedRef.current.open({ view: "files", title: "files", path: "." }); return;
+      case "closeTab": {
+        const host = focusedRef.current;
+        if (host.activeId) host.close(host.activeId);
         return;
       }
-      // §11: Tab always swaps panels, including from inside the prompt — that is its
-      // main use. The prompt takes newlines with ⇧⏎, so it never needs Tab itself.
-      // ⌃⇥ is excluded: it cycles tabs within the focused panel.
-      if (e.key === "Tab" && !e.ctrlKey) {
+      case "collapse": layoutRef.current.toggleCollapse(); return;
+      case "maximize": layoutRef.current.toggleMaximize(layoutRef.current.focus); return;
+      case "attach":
+      case "compact":
+      case "clear":
+      case "rewind":
+        runCommand(id);
+        return;
+      default:
+        return;
+    }
+  }, [loadTree, newSession]);
+
+  const runActionRef = useRef(runAction);
+  runActionRef.current = runAction;
+
+  // Global keys (§11). Chords are ⌘-based; see keys.ts for why not F-keys.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") {
+        if (leaderArmed) { setLeaderArmed(false); return; }
+        if (state.status === "running") { e.preventDefault(); cancel(); }
+        return;
+      }
+
+      // Second key of a ⌘K chord.
+      if (leaderArmed) {
+        e.preventDefault();
+        setLeaderArmed(false);
+        const binding = resolveLeader(e.key);
+        if (binding) runActionRef.current(binding.id);
+        return;
+      }
+
+      // Tab always swaps panels, including from the prompt — ⇧⏎ takes newlines.
+      if (e.key === "Tab" && !hasMod(e)) {
         e.preventDefault();
         layout.swapFocus();
         return;
       }
-      if (e.ctrlKey && e.key === "ArrowLeft") {
+      if (hasMod(e) && e.key === "Tab") {
         e.preventDefault();
-        layout.setGutter((g) => g - GUTTER_STEP);
+        focusedRef.current.cycle(e.shiftKey ? -1 : 1);
         return;
       }
-      if (e.ctrlKey && e.key === "ArrowRight") {
+      if (hasMod(e) && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
         e.preventDefault();
-        layout.setGutter((g) => g + GUTTER_STEP);
+        layout.setGutter((g) => g + (e.key === "ArrowRight" ? GUTTER_STEP : -GUTTER_STEP));
         return;
       }
-      if (e.ctrlKey && (e.key === "b" || e.key === "B")) {
-        e.preventDefault();
-        layout.toggleCollapse();
-        return;
-      }
-      // §11 pickers and sessions.
-      if (e.ctrlKey && (e.key === "t" || e.key === "T")) {
-        e.preventDefault();
-        setPick("menu");
-        return;
-      }
-      if (e.ctrlKey && (e.key === "p" || e.key === "P")) {
-        e.preventDefault();
-        if (e.shiftKey) {
-          setPick("touched");
-        } else {
-          loadTree();
-          setPick("files");
-        }
-        return;
-      }
-      if (e.ctrlKey && (e.key === "n" || e.key === "N")) {
-        e.preventDefault();
-        newSession();
-        return;
-      }
-      if (e.ctrlKey && (e.key === "1" || e.key === "2")) {
+      if (hasMod(e) && (e.key === "1" || e.key === "2")) {
         e.preventDefault();
         layout.setFocus(e.key === "1" ? "left" : "right");
         return;
       }
-      if (e.ctrlKey && e.key === "Tab") {
-        e.preventDefault();
-        focused.cycle(e.shiftKey ? -1 : 1);
+
+      const binding = resolve(e);
+      if (!binding) return;
+      e.preventDefault();
+      if (binding.id === "menu") {
+        // ⌘K is both the menu and the leader: arm it, and open the menu if the next
+        // key is not one of its own.
+        setLeaderArmed(true);
         return;
       }
-      if (e.ctrlKey && (e.key === "w" || e.key === "W")) {
-        e.preventDefault();
-        if (focused.activeId) focused.close(focused.activeId);
-        return;
-      }
-      if (e.key === "F10") e.preventDefault();
+      runActionRef.current(binding.id);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state.status, cancel, layout, focused, loadTree, newSession]);
+  }, [state.status, cancel, layout, leaderArmed]);
 
   const colsClass = [
     "cols",
@@ -327,7 +435,7 @@ export function App(): JSX.Element {
       case "chat":
         return (
           <>
-            <Chat rows={state.rows} running={running} onOpen={(p) => openFile(side, p)} />
+            <Chat rows={state.rows} running={running} onOpen={(p) => openFile(p)} />
             <Prompt
               onSend={send} running={running} queued={state.queued}
               focused={layout.focus === side}
@@ -335,6 +443,9 @@ export function App(): JSX.Element {
               onRemoveChip={(key) => setChips((prev) => removeChip(prev, key))}
               text={draft}
               onTextChange={setDraft}
+              files={tree}
+              onAttach={(path) => mention([fileAttachment(path)])}
+              onCommand={runCommand}
             />
           </>
         );
@@ -376,7 +487,7 @@ export function App(): JSX.Element {
               const host = side === "left" ? left : right;
               host.update(tab.id, { path: next, title: next === "." ? "files" : next.split("/").pop()! });
             }}
-            onOpen={(p) => openFile(side, p)}
+            onOpen={(p) => openFile(p)}
             onMention={mention}
           />
         );
@@ -400,13 +511,15 @@ export function App(): JSX.Element {
 
   return (
     <div className="screen" style={{ ["--gutter" as string]: String(layout.gutter) }}>
-      <TopLine state={state} />
+      <TopLine state={state} onModelClick={() => setPick("settings")} />
       <div className={colsClass} ref={colsRef}>
         <Panel
           side="left" focus={layout.focus} collapsed={layout.collapsed}
           onFocus={layout.setFocus} tabs={left}
           titleSuffix={left.active?.view === "chat" ? sessionName(state) : undefined}
           extra={panelExtra(left.active)}
+          maximized={layout.maximized === "left"}
+          onMaximize={layout.toggleMaximize}
         >
           {renderView(left.active, "left")}
         </Panel>
@@ -419,12 +532,14 @@ export function App(): JSX.Element {
           side="right" focus={layout.focus} collapsed={layout.collapsed}
           onFocus={layout.setFocus} tabs={right}
           extra={panelExtra(right.active)}
+          maximized={layout.maximized === "right"}
+          onMaximize={layout.toggleMaximize}
         >
           {renderView(right.active, "right")}
         </Panel>
       </div>
       <StatusLine state={state} layout={layout} />
-      <FKeys keys={keysFor(focused.active?.view)} />
+      <FKeys bindings={barFor(focused.active?.view)} onRun={runAction} />
       {pick === "menu" && (
         <Pick
           title="open"
@@ -496,6 +611,57 @@ export function App(): JSX.Element {
           onClose={() => setPick(null)}
         />
       )}
+      {pick === "folders" && (
+        <Pick
+          title="open folder"
+          placeholder="filter"
+          hint="⏎ open · Esc close"
+          items={folders.map((f) => ({
+            id: f.path,
+            label: f.path.replace(/^\/Users\/[^/]+/, "~"),
+            detail: f.recent ? "recent" : undefined,
+            group: f.recent ? "recent" : "home",
+          }))}
+          onChoose={(item) => {
+            // One repo per window (§10): opening a folder is a new backend.
+            toast("info", `run: aicommander serve ${item.id}`);
+            setPick(null);
+          }}
+          onClose={() => setPick(null)}
+        />
+      )}
+      {pick === "settings" && (
+        <Pick
+          title="settings"
+          placeholder="filter"
+          hint="⏎ choose · Esc close"
+          items={[
+            {
+              id: "brain",
+              label: `brain · ${state.config?.brain.model ?? "?"}`,
+              detail: state.config ? hostOf(state.config.brain.endpoint) : "",
+              group: "model",
+            },
+            { id: "mode", label: `mode · ${state.config?.mode ?? "ask"}`, detail: "ask / auto / plan", group: "loop" },
+            { id: "ctx", label: `context · ${fmtK(state.ctxMax)}`, detail: "from the endpoint", group: "loop" },
+          ]}
+          onChoose={() => {
+            toast("info", "editing settings arrives with the options modal (M2)");
+            setPick(null);
+          }}
+          onClose={() => setPick(null)}
+        />
+      )}
+      {pick === "help" && (
+        <Pick
+          title="keys"
+          placeholder="filter"
+          hint="⏎ run · Esc close"
+          items={BINDINGS.map((b) => ({ id: b.id, label: b.label, detail: b.hint }))}
+          onChoose={(item) => { setPick(null); runAction(item.id); }}
+          onClose={() => setPick(null)}
+        />
+      )}
       {toasts.length > 0 && (
         <div className="toasts">
           {toasts.map((t) => (
@@ -508,7 +674,7 @@ export function App(): JSX.Element {
 }
 
 function Panel({
-  side, focus, collapsed, onFocus, tabs, titleSuffix, extra, children,
+  side, focus, collapsed, onFocus, tabs, titleSuffix, extra, maximized, onMaximize, children,
 }: {
   side: PanelSide;
   focus: PanelSide;
@@ -517,6 +683,8 @@ function Panel({
   tabs: PanelTabs;
   titleSuffix?: string;
   extra?: React.ReactNode;
+  maximized: boolean;
+  onMaximize: (side: PanelSide) => void;
   children: React.ReactNode;
 }): JSX.Element {
   const cls = [
@@ -532,7 +700,14 @@ function Panel({
   return (
     <div className={cls} onMouseDown={() => onFocus(side)}>
       <div className="t">{title}</div>
-      {extra !== null && extra !== undefined && <div className="tr">{extra}</div>}
+      <div className="tr">
+        {extra}
+        <i
+          className="max"
+          title={maximized ? "restore" : "maximize (⌘⇧Enter)"}
+          onMouseDown={(e) => { e.stopPropagation(); onMaximize(side); }}
+        >{maximized ? "▾" : "▴"}</i>
+      </div>
       {tabs.tabs.length > 1 && (
         <div className="tabs">
           {tabs.tabs.map((t) => (
@@ -559,7 +734,9 @@ function Panel({
 const sessionName = (s: UiState): string =>
   s.sessions.find((x) => x.id === s.sessionId)?.name ?? "";
 
-function TopLine({ state }: { state: UiState }): JSX.Element {
+function TopLine({
+  state, onModelClick,
+}: { state: UiState; onModelClick: () => void }): JSX.Element {
   const brain = state.config?.brain;
   const host = brain ? hostOf(brain.endpoint) : "";
   return (
@@ -573,7 +750,11 @@ function TopLine({ state }: { state: UiState }): JSX.Element {
         </span>
       )}
       <div className="r">
-        {brain && <span className="amber">brain {brain.model} @ {host}</span>}
+        {brain && (
+          <span className="amber clickable" onClick={onModelClick} title="settings (⌘,)">
+            {brain.model} @ {host}
+          </span>
+        )}
         <span>ctx {fmtK(state.ctxUsed)}/{fmtK(state.ctxMax)}</span>
         {!state.connected && <span style={{ color: "var(--red)" }}>disconnected</span>}
       </div>
@@ -623,7 +804,9 @@ function Chat({
   return (
     <div className="body wrap" ref={ref} onScroll={onScroll}>
       {rows.map((r, i) => <Row key={r.callId ?? i} row={r} onOpen={onOpen} />)}
-      {running && rows[rows.length - 1]?.kind !== "tool" && <div className="b"><span className="spin">⠹</span></div>}
+      {running && rows[rows.length - 1]?.kind !== "tool" && (
+        <div className="b"><Spinner /> <span className="dim">thinking…</span></div>
+      )}
     </div>
   );
 }
@@ -633,7 +816,7 @@ function Row({ row, onOpen }: { row: ChatRow; onOpen: (path: string) => void }):
     const cls = row.ok === false ? "tool err" : "tool";
     return (
       <div className={cls}>
-        {row.running && <span className="spin">⠹ </span>}
+        {row.running && <><Spinner /> </>}
         {row.name}{" "}
         {row.path
           ? <i><Mention path={row.path} label={row.args ?? row.path} onOpen={onOpen} /></i>
@@ -651,6 +834,21 @@ function Row({ row, onOpen }: { row: ChatRow; onOpen: (path: string) => void }):
       )}
     </div>
   );
+}
+
+/**
+ * Braille spinner. Driven by a frame counter rather than a CSS animation because the
+ * glyph itself changes — the point is that a still frame reads as frozen, which is
+ * exactly what it looked like before.
+ */
+function Spinner(): JSX.Element {
+  const FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setFrame((f) => (f + 1) % FRAMES.length), 80);
+    return () => clearInterval(t);
+  }, []);
+  return <span className="spin">{FRAMES[frame]}</span>;
 }
 
 /** A clickable path — the same code path as ⏎ in the files view. */
@@ -673,6 +871,7 @@ function Mention({
 
 function Prompt({
   onSend, running, queued, focused, chips, onRemoveChip, text, onTextChange,
+  files, onAttach, onCommand,
 }: {
   onSend: (text: string, attachments: Attachment[]) => void;
   running: boolean;
@@ -683,6 +882,12 @@ function Prompt({
   /** Lifted to the app so workspace.json can hold the draft (v2 §4). */
   text: string;
   onTextChange: (text: string) => void;
+  /** Repo files, for @ completion. */
+  files: string[];
+  /** @ picked a file: it becomes a chip. */
+  onAttach: (path: string) => void;
+  /** A /command was entered. */
+  onCommand: (name: string, arg?: string) => void;
 }): JSX.Element {
   const setText = onTextChange;
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -696,18 +901,79 @@ function Prompt({
     el.style.height = `${Math.min(el.scrollHeight, max)}px`;
   }, [text]);
 
-  // Only hold the caret while this panel has focus, so Tab can leave it.
+  // Take the caret whenever this panel becomes focused, so switching panels or tabs
+  // lands you ready to type instead of needing a click.
   useEffect(() => {
     if (focused) ref.current?.focus();
     else ref.current?.blur();
   }, [focused]);
 
+  /** The @path or /command being typed right now, for the inline completer. */
+  const trailing = /(^|\s)([@/])([\w./-]*)$/.exec(text);
+  const completing = trailing
+    ? { sigil: trailing[2]! as "@" | "/", query: trailing[3] ?? "" }
+    : undefined;
+
+  const suggestions = useMemo(() => {
+    if (!completing) return [];
+    if (completing.sigil === "/") {
+      return COMMANDS
+        .filter((c) => c.name.startsWith(completing.query.toLowerCase()))
+        .slice(0, 8)
+        .map((c) => ({ value: c.name, detail: c.detail }));
+    }
+    return defaultFilter(files.map((f) => ({ id: f, label: f })), completing.query)
+      .slice(0, 8)
+      .map((f) => ({ value: f.label, detail: "" }));
+  }, [completing?.sigil, completing?.query, files]);
+
+  const [suggestion, setSuggestion] = useState(0);
+  useEffect(() => { setSuggestion(0); }, [text]);
+
+  const applySuggestion = (value: string): void => {
+    if (!trailing) return;
+    const before = text.slice(0, text.length - (trailing[2]!.length + (trailing[3] ?? "").length));
+    if (completing?.sigil === "@") {
+      // A file becomes a chip, not text — the same shape the picker produces (§7).
+      onAttach(value);
+      setText(before);
+    } else {
+      setText(`${before}/${value} `);
+    }
+  };
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    // Inline completion for @path and /command.
+    if (suggestions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSuggestion((i) => Math.min(suggestions.length - 1, i + 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSuggestion((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+        e.preventDefault();
+        applySuggestion(suggestions[suggestion]!.value);
+        return;
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       const trimmed = text.trim();
       // Attachments alone are not a turn; the model needs something to do with them.
       if (!trimmed) return;
+      // A line that is only a slash command runs here rather than going to the brain.
+      const command = /^\/(\w+)\s*(.*)$/.exec(trimmed);
+      if (command && COMMANDS.some((c) => c.name === command[1]!.toLowerCase())) {
+        onCommand(command[1]!.toLowerCase(), command[2]);
+        setText("");
+        return;
+      }
       onSend(trimmed, chips.map((c) => c.attachment));
       setText("");
     }
@@ -734,6 +1000,21 @@ function Prompt({
               {c.label}
               <i className="x" title="remove" onMouseDown={(e) => { e.preventDefault(); onRemoveChip(c.key); }}>×</i>
             </span>
+          ))}
+        </div>
+      )}
+      {suggestions.length > 0 && (
+        <div className="suggest">
+          {suggestions.map((sug, i) => (
+            <div
+              key={sug.value}
+              className={i === suggestion ? "suggest-row sel" : "suggest-row"}
+              onMouseMove={() => setSuggestion(i)}
+              onMouseDown={(e) => { e.preventDefault(); applySuggestion(sug.value); }}
+            >
+              <span>{completing?.sigil}{sug.value}</span>
+              {sug.detail && <span className="dim">{sug.detail}</span>}
+            </div>
           ))}
         </div>
       )}
@@ -783,13 +1064,20 @@ function StatusLine({
   );
 }
 
-function FKeys({ keys }: { keys: FKeySet }): JSX.Element {
+/**
+ * The bar along the bottom (§11) — still the mockup's shape, but showing chords that
+ * exist on every keyboard. Each entry is clickable, so the whole keymap is reachable
+ * with a mouse too.
+ */
+function FKeys({
+  bindings, onRun,
+}: { bindings: Binding[]; onRun: (id: string) => void }): JSX.Element {
   return (
     <div className="fkeys">
-      {keys.map(([key, label, live]) => (
-        <span key={key}>
-          <b>{key}</b>
-          <span className={live ? "ctx" : undefined}>{label}</span>
+      {bindings.map((b) => (
+        <span key={b.id} className="fkey" onClick={() => onRun(b.id)} title={b.hint}>
+          <b>{b.hint}</b>
+          <span className="ctx">{b.label}</span>
         </span>
       ))}
     </div>

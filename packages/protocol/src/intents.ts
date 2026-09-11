@@ -75,6 +75,8 @@ export const OptionsSet = intent("options.set", {
 export const FsList = intent("fs.list", { path: z.string() });
 /** Every file under the root, for ⌃P fuzzy open (§11). Directories are not included. */
 export const FsTree = intent("fs.tree", { limit: z.number().int().positive().default(5000) });
+/** §10 open folder: directories the backend can offer, plus recents. */
+export const FoldersList = intent("folders.list", { under: z.string().optional() });
 export const FsRead = intent("fs.read", { path: z.string() });
 /** `baseHash` is the hash the editor loaded; a mismatch means the file changed underneath. */
 export const FsWrite = intent("fs.write", {
@@ -105,7 +107,7 @@ export const Intent = z.discriminatedUnion("type", [
   SessionSend, SessionCancel, SessionRewind, SessionDropGroup, SessionDropToolOutput,
   SessionCompact, SessionClear,
   PermissionAnswerIntent, AskAnswer, FilesShown, OptionsSet,
-  FsList, FsTree, FsRead, FsWrite, FsMkdir, FsRename, FsCopy, FsMove, FsDelete,
+  FsList, FsTree, FoldersList, FsRead, FsWrite, FsMkdir, FsRename, FsCopy, FsMove, FsDelete,
   GitStatus, GitLog, GitDiff, GitCommit, GitCheckout,
   WorkspaceSet, WorkspaceGet, ViewerList, ViewerInstall,
 ]);

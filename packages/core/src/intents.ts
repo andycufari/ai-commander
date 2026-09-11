@@ -7,7 +7,19 @@ import {
   type Config, type Event, type FsEntry, type Intent, type Rules, type Workspace,
   DEFAULT_WORKSPACE, Workspace as WorkspaceSchema,
 } from "@aicommander/protocol";
-import { projectDir } from "./config.js";
+import { homedir } from "node:os";
+import { globalDir, projectDir } from "./config.js";
+
+/** ~/.aicommander/recents.json — repos opened before (§4). */
+async function readRecents(): Promise<string[]> {
+  try {
+    const raw = await readFile(join(globalDir(), "recents.json"), "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [];
+  } catch {
+    return [];
+  }
+}
 import { resolveInRoot, toRepoPath } from "./paths.js";
 import { globFiles } from "./tools.js";
 import { SessionStore } from "./sessions.js";
@@ -148,6 +160,34 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
         intentId: intent.id,
         paths,
         truncated: all.length > paths.length,
+      }));
+      return;
+    }
+
+    case "folders.list": {
+      // Directories only, and never the dot-directories — this is for picking a repo,
+      // not browsing a filesystem.
+      const base = intent.under ?? homedir();
+      const recents = await readRecents();
+      const entries = await readdir(base, { withFileTypes: true }).catch(() => []);
+      const here = entries
+        .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+        .map((e) => join(base, e.name))
+        .sort();
+      const known = await Promise.all(
+        here.map(async (p) => ({
+          path: p,
+          recent: false,
+          known: await stat(join(p, ".aicommander")).then(() => true).catch(() => false),
+        })),
+      );
+      ctx.send(ev("folders.listed", {
+        intentId: intent.id,
+        folders: [
+          ...recents.map((p) => ({ path: p, recent: true, known: true })),
+          ...known,
+        ],
+        under: base,
       }));
       return;
     }

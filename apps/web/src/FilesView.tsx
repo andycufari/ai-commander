@@ -155,7 +155,7 @@ export function FilesView({
       >
         {error && <div className="err-row">{error}</div>}
         {!atRoot && (
-          <div className="row up" onDoubleClick={up}>
+          <div className="row up" onClick={up}>
             <span className="d">▸ ..</span>
           </div>
         )}
@@ -167,7 +167,7 @@ export function FilesView({
               key={entry.path}
               className={`row${i === cursor ? " sel" : ""}${isMarked ? " marked" : ""}`}
               onMouseDown={() => setCursor(i)}
-              onDoubleClick={() => enter(entry)}
+              onClick={() => enter(entry)}
               role="option"
               aria-selected={i === cursor}
             >

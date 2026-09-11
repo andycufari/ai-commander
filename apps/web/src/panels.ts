@@ -10,10 +10,17 @@ export const GUTTER_STEP = 0.05;
 export const clampGutter = (v: number): number =>
   Math.min(GUTTER_MAX, Math.max(GUTTER_MIN, Math.round(v * 1000) / 1000));
 
+/** Maximised panels take 80% of the row — wide enough to read, narrow enough to keep
+ *  the conversation in view (unlike a collapse, which hides it). */
+export const MAXIMIZED = 0.8;
+
 export interface PanelLayout {
   gutter: number;
   focus: PanelSide;
   collapsed: PanelSide | null;
+  /** Which panel is maximised, if any. */
+  maximized: PanelSide | null;
+  toggleMaximize: (side: PanelSide) => void;
   setGutter: (v: number | ((prev: number) => number)) => void;
   setFocus: (side: PanelSide) => void;
   toggleCollapse: () => void;
@@ -34,6 +41,9 @@ export function usePanelLayout(init: LayoutInit = {}): PanelLayout {
   const [gutter, setGutterRaw] = useState(init.gutter ?? 0.5);
   const [focus, setFocus] = useState<PanelSide>(init.focus ?? "left");
   const [collapsed, setCollapsed] = useState<PanelSide | null>(init.collapsed ?? null);
+  const [maximized, setMaximized] = useState<PanelSide | null>(null);
+  /** The gutter to return to when un-maximising. */
+  const restoreGutter = useRef(init.gutter ?? 0.5);
 
   // Adopt a layout that arrives from the backend after the first render.
   const applied = useRef(false);
@@ -53,6 +63,19 @@ export function usePanelLayout(init: LayoutInit = {}): PanelLayout {
     setFocus((f) => (f === "left" ? "right" : "left"));
   }, []);
 
+  /** Maximise a panel to 80%, or restore the gutter it had before. */
+  const toggleMaximize = useCallback((side: PanelSide) => {
+    setMaximized((current) => {
+      if (current === side) {
+        setGutterRaw(clampGutter(restoreGutter.current));
+        return null;
+      }
+      if (current === null) restoreGutter.current = gutter;
+      setGutterRaw(side === "left" ? MAXIMIZED : 1 - MAXIMIZED);
+      return side;
+    });
+  }, [gutter]);
+
   /** ⌃B collapses the *other* panel; pressing it again restores (§10). */
   const toggleCollapse = useCallback(() => {
     setCollapsed((c) => (c === null ? (focus === "left" ? "right" : "left") : null));
@@ -64,8 +87,8 @@ export function usePanelLayout(init: LayoutInit = {}): PanelLayout {
   }, [gutter, focus, collapsed, onChange]);
 
   return {
-    gutter, focus, collapsed,
-    setGutter, setFocus, toggleCollapse, swapFocus,
+    gutter, focus, collapsed, maximized,
+    setGutter, setFocus, toggleCollapse, toggleMaximize, swapFocus,
     other: focus === "left" ? "right" : "left",
   };
 }

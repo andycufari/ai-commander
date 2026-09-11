@@ -1,0 +1,22 @@
+{
+  "layout": "commander",
+  "gutter": 0.5,
+  "focus": "left",
+  "collapsed": null,
+  "panels": {
+    "left": {
+      "tabs": [
+        {
+          "view": "chat"
+        }
+      ],
+      "active": 0
+    },
+    "right": {
+      "tabs": [],
+      "active": 0
+    }
+  },
+  "marked": [],
+  "promptDraft": ""
+}

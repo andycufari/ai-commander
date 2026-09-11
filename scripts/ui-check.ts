@@ -19,6 +19,9 @@ const flag = (name: string): string | undefined => {
 };
 const PORT = Number.parseInt(flag("--port") ?? "7777", 10);
 const SHOT = flag("--shot");
+/** The image group needs a real image; point it at one with --image-dir/--image. */
+const IMAGE_DIR = flag("--image-dir") ?? "docs";
+const IMAGE_FILE = flag("--image") ?? "";
 
 const C = { red: "\x1b[38;5;167m", green: "\x1b[38;5;114m", dim: "\x1b[38;5;65m", off: "\x1b[0m" };
 
@@ -221,20 +224,21 @@ export async function assertGutterAt(page: Page, expected: number, tolerance = 0
   );
 }
 
-/** §11: the F-bar always shows what the keys do *here*. */
+/** §11: the key bar always shows what the keys do *here*, with a reachable chord. */
 export async function assertFBar(page: Page, expectLabel?: string): Promise<void> {
-  const bar = await page.eval<{ keys: string[]; labels: string[] }>(`(() => {
-    const spans = [...document.querySelectorAll('.fkeys > span')];
+  const bar = await page.eval<{ hints: string[]; labels: string[] }>(`(() => {
+    const spans = [...document.querySelectorAll('.fkeys .fkey')];
     return {
-      keys: spans.map(s => s.querySelector('b')?.textContent ?? ''),
-      labels: spans.map(s => (s.textContent ?? '').replace(/^F\\d+/, '').trim()),
+      hints: spans.map(s => s.querySelector('b')?.textContent ?? ''),
+      labels: spans.map(s => (s.querySelector('.ctx')?.textContent ?? '').trim()),
     };
   })()`);
-  check("F-bar has F1 through F10", bar.keys.join(",") === "F1,F2,F3,F4,F5,F6,F7,F8,F9,F10", bar.keys);
-  check("F1 is help and F10 is quit",
-    bar.labels[0] === "help" && bar.labels[9] === "quit", [bar.labels[0], bar.labels[9]]);
+  check("the key bar is populated", bar.hints.length > 0, bar);
+  // F-keys are gone: not every keyboard has them, and the browser claims several.
+  check("every entry shows a real chord", bar.hints.every((h) => h.length > 0 && !/^F\d+$/.test(h)), bar.hints);
+  check("help is on the bar", bar.labels.includes("help"), bar.labels);
   if (expectLabel !== undefined) {
-    check(`F-bar is context-relative (shows "${expectLabel}")`, bar.labels.includes(expectLabel), bar.labels);
+    check(`the bar is context-relative (shows "${expectLabel}")`, bar.labels.includes(expectLabel), bar.labels);
   }
 }
 
@@ -315,10 +319,9 @@ async function openViaFiles(page: Page, segments: string[]): Promise<void> {
   // From a known shell, not whatever the previous group left persisted.
   await resetWorkspace(page);
   await key(page, "Tab");
-  // ⌃T is the pick modal; its "files" entry is what opens a files tab.
-  await key(page, "t", { ctrl: true, settle: 400 });
-  await key(page, "ArrowDown", { settle: 120 });
-  await key(page, "Enter", { settle: 900 });
+  // ⌘K T opens a files tab (§11).
+  await key(page, "k", { ctrl: true, settle: 250 });
+  await key(page, "t", { settle: 900 });
 
   for (const segment of segments) {
     // One line: a newline inside this expression ends up mid-literal in the page.
@@ -385,26 +388,25 @@ async function main(): Promise<void> {
     const start = await tabState();
     check("a lone tab hides the strip", start.strip === 0, start);
 
-    // ⌃T is the pick modal now; "files" in it opens the files tab.
-    await key(page, "t", { ctrl: true, settle: 400 });
-    await key(page, "ArrowDown", { settle: 120 });
-    await key(page, "Enter", { settle: 700 });
+    await key(page, "k", { ctrl: true, settle: 250 });
+    await key(page, "t", { settle: 700 });
     const opened = await tabState();
-    check("the pick menu opens a files tab and shows the strip", opened.strip === 2, opened);
+    check("⌘K T opens a files tab and shows the strip", opened.strip === 2, opened);
     check("the new tab takes the panel title", opened.title.startsWith("files"), opened.title);
-    check("the F-bar follows the focused view", opened.bar.includes("mkdir"), opened.bar);
+    check("the key bar follows the focused view", opened.bar.includes("open"), opened.bar);
     await assertTitlesNotClipped(page);
     await assertNoOverflow(page);
 
     await key(page, "Tab", { ctrl: true, settle: 250 });
     const cycled = await tabState();
     check("⌃⇥ cycles back to chat", cycled.title.startsWith("chat"), cycled.title);
-    check("the F-bar switches back to chat keys", cycled.bar.includes("sessions"), cycled.bar);
+    check("the key bar switches back to chat keys", cycled.bar.includes("sessions"), cycled.bar);
 
     await key(page, "Tab", { ctrl: true });
-    await key(page, "w", { ctrl: true, settle: 250 });
+    await key(page, "k", { ctrl: true, settle: 250 });
+    await key(page, "w", { settle: 350 });
     const closed = await tabState();
-    check("⌃W closes the tab and the strip hides again", closed.strip === 0, closed);
+    check("⌘K W closes the tab and the strip hides again", closed.strip === 0, closed);
     check("the shell is still usable after closing a tab",
       closed.title.startsWith("chat") && (await page.eval<boolean>("!!document.querySelector('.prompt')")),
       closed);
@@ -414,9 +416,8 @@ async function main(): Promise<void> {
     await resetWorkspace(page);
     // Open a files tab in the right panel and drive the NC keys.
     await key(page, "Tab");
-    await key(page, "t", { ctrl: true, settle: 400 });
-    await key(page, "ArrowDown", { settle: 120 });
-    await key(page, "Enter", { settle: 900 });
+    await key(page, "k", { ctrl: true, settle: 250 });
+    await key(page, "t", { settle: 900 });
 
     const fileKey = (k: string, ctrl = false): Promise<void> =>
       key(page, k, { ctrl, focus: ".files", settle: 240 });
@@ -440,7 +441,7 @@ async function main(): Promise<void> {
     await fileKey("h", true);
     const withHidden = await page.eval<string[]>(
       `[...document.querySelectorAll('.files .row:not(.up) .nm')].map(n => n.textContent.trim())`);
-    check("⌃H reveals dotfiles", withHidden.length > listing.names.length, { before: listing.names.length, after: withHidden.length });
+    check("⌘H reveals dotfiles", withHidden.length > listing.names.length, { before: listing.names.length, after: withHidden.length });
     await fileKey("h", true);
 
     // Mark two files with Ins, then @ — which must produce chips, not prompt text.
@@ -479,13 +480,24 @@ async function main(): Promise<void> {
 
     group("editor");
     // docs/ then NOTES.md — a markdown file, which opens as a preview.
-    await openViaFiles(page, ["docs", "NOTES.md"]);
-    const preview = await page.eval<{ md: boolean; title: string }>(`(() => ({
-      md: !!document.querySelector('.body.md'),
-      title: document.querySelector('.cols > .blk .t')?.textContent ?? '',
-    }))()`);
+    // Whatever markdown this repo actually has at its root — hardcoding a name ties
+    // the suite to one fixture, and it should run against any repo.
+    await resetWorkspace(page);
+    await key(page, "Tab");
+    await key(page, "k", { ctrl: true, settle: 250 });
+    await key(page, "t", { settle: 900 });
+    const mdName = await page.eval<string>(
+      `([...document.querySelectorAll('.files .row:not(.up) .nm')].map(n => n.textContent.trim()).find(n => /\\.md$/.test(n)) ?? '')`);
+    if (!mdName) throw new Error("ui-check: no markdown file at the repo root to open");
+    await openViaFiles(page, [mdName]);
+    const preview = await page.eval<{ md: boolean; title: string }>(`(() => {
+      // The file opens in whichever panel is not showing the chat.
+      const blks = [...document.querySelectorAll('.cols > .blk')];
+      const host = blks.find(b => b.querySelector('.body.md, .body.cm')) ?? blks[0];
+      return { md: !!document.querySelector('.body.md'), title: host?.querySelector('.t')?.textContent ?? '' };
+    })()`);
     check("markdown opens as a preview in the other panel", preview.md, preview);
-    check("the editor tab is titled by the file", preview.title.includes("NOTES.md"), preview.title);
+    check("the editor tab is titled by the file", preview.title.includes(mdName), preview.title);
 
     // ⌃E toggles preview → editor in the same tab.
     await key(page, "e", { ctrl: true, focus: ".body.md", settle: 800 });
@@ -497,17 +509,20 @@ async function main(): Promise<void> {
     await assertSurvivesResize(page, ".body.cm .cm-scroller", "editor");
 
     group("image viewer");
-    // hw/ then board.png
-    await openViaFiles(page, ["hw", "board.png"]);
-    const img = await page.eval<{ has: boolean; caption: string }>(`(() => ({
-      has: !!document.querySelector('.body.image img'),
-      caption: document.querySelector('.image-tb')?.textContent ?? '',
-    }))()`);
-    check("image opens in the viewer", img.has, img);
-    check("caption carries filename and dimensions",
-      /board\.png/.test(img.caption) && /\d+×\d+/.test(img.caption), img.caption);
-    check("image starts fitted", /\(fit\)/.test(img.caption), img.caption);
-    await assertSurvivesResize(page, ".body.image", "image viewer");
+    if (!IMAGE_FILE) {
+      console.log(`  ${C.dim}skipped — pass --image-dir and --image to check the viewer${C.off}`);
+    } else {
+      await openViaFiles(page, [IMAGE_DIR, IMAGE_FILE]);
+      const img = await page.eval<{ has: boolean; caption: string }>(`(() => ({
+        has: !!document.querySelector('.body.image img'),
+        caption: document.querySelector('.image-tb')?.textContent ?? '',
+      }))()`);
+      check("image opens in the viewer", img.has, img);
+      check("caption carries filename and dimensions",
+        img.caption.includes(IMAGE_FILE) && /\d+×\d+/.test(img.caption), img.caption);
+      check("image starts fitted", /\(fit\)/.test(img.caption), img.caption);
+      await assertSurvivesResize(page, ".body.image", "image viewer");
+    }
 
     group("pickers");
     await resetWorkspace(page);
@@ -517,12 +532,12 @@ async function main(): Promise<void> {
           rows: [...m.querySelectorAll('.pick-row')].map(r => r.textContent ?? ''),
           hint: m.querySelector('.k')?.textContent ?? '' } : null; })()`);
 
-    await key(page, "t", { ctrl: true, settle: 400 });
+    await key(page, "k", { ctrl: true, settle: 250 });
+    await key(page, "Escape", { settle: 150 });
+    await key(page, "p", { ctrl: true, settle: 700 });
     const menu = await modalState();
-    check("⌃T opens the pick modal", menu !== null, menu);
-    check("the menu offers a new session and file choices",
-      !!menu && menu.rows.some((r) => r.includes("new session")) && menu.rows.some((r) => r.includes("file")),
-      menu?.rows);
+    check("⌘P opens the pick modal", menu !== null, menu);
+    check("the file pick lists repo files", !!menu && menu.rows.length > 0, menu?.rows.slice(0, 3));
     check("the pick modal is info tier",
       await page.eval<boolean>(`!!document.querySelector('.modal.info.pick')`));
     await assertNoOverflow(page);
@@ -532,17 +547,17 @@ async function main(): Promise<void> {
 
     await key(page, "p", { ctrl: true, settle: 900 });
     const files = await modalState();
-    check("⌃P lists repo files", !!files && files.rows.length > 0, files?.rows.slice(0, 4));
-    check("⌃P hints both open targets",
+    check("⌘P lists repo files", !!files && files.rows.length > 0, files?.rows.slice(0, 4));
+    check("⌘P hints both open targets",
       !!files && files.hint.includes("here") && files.hint.includes("other"), files?.hint);
 
     for (const ch of "notes") await key(page, ch, { settle: 80 });
     await sleep(300);
     const filtered = await modalState();
     check("typing filters the list fuzzily",
-      !!filtered && filtered.rows.length < (files?.rows.length ?? 0) &&
-        filtered.rows.some((r) => r.toLowerCase().includes("notes")),
-      filtered?.rows);
+      !!filtered && filtered.rows.length > 0 && filtered.rows.length < (files?.rows.length ?? 0)
+        && filtered.rows.every((r) => /n.*o.*t.*e.*s/i.test(r)),
+      filtered?.rows.slice(0, 3));
 
     await key(page, "Enter", { settle: 900 });
     check("⏎ opens the picked file", (await modalState()) === null &&
@@ -550,18 +565,18 @@ async function main(): Promise<void> {
 
     await key(page, "p", { ctrl: true, shift: true, settle: 500 });
     const touched = await modalState();
-    check("⌃⇧P lists the files this session touched", touched !== null, touched?.rows);
+    check("⌘⇧P lists the files this session touched", touched !== null, touched?.rows);
     await key(page, "Escape", { settle: 250 });
 
     group("panel focus keys");
     await key(page, "2", { ctrl: true, settle: 250 });
     const rightFocused = await page.eval<number>(
       `[...document.querySelectorAll('.cols > .blk')].findIndex(b => b.classList.contains('focus'))`);
-    check("⌃2 focuses the right panel", rightFocused === 1, { index: rightFocused });
+    check("⌘2 focuses the right panel", rightFocused === 1, { index: rightFocused });
     await key(page, "1", { ctrl: true, settle: 250 });
     const leftFocused = await page.eval<number>(
       `[...document.querySelectorAll('.cols > .blk')].findIndex(b => b.classList.contains('focus'))`);
-    check("⌃1 focuses the left panel", leftFocused === 0, { index: leftFocused });
+    check("⌘1 focuses the left panel", leftFocused === 0, { index: leftFocused });
 
     group("workspace restore");
     // Arrange a layout, reload, and assert it came back — including no flash of the
@@ -618,7 +633,7 @@ async function main(): Promise<void> {
 
     group("mentions");
     await resetWorkspace(page);
-    await page.fill(".prompt textarea", "look at @docs/NOTES.md and @nothing here");
+    await page.fill(".prompt textarea", `look at @${mdName} and @nothing here`);
     await key(page, "Enter", { settle: 1200 });
     const mentions = await page.eval<{ links: string[]; text: string }>(`(() => {
       const row = document.querySelectorAll('.u')[document.querySelectorAll('.u').length - 1];
@@ -627,7 +642,7 @@ async function main(): Promise<void> {
         text: row?.textContent ?? '',
       };
     })()`);
-    check("an @path becomes a link", mentions.links.includes("@docs/NOTES.md"), mentions);
+    check("an @path becomes a link", mentions.links.includes(`@${mdName}`), mentions);
     check("a non-path @word stays prose", !mentions.links.some((l) => l.includes("nothing")), mentions);
     check("the prose around a mention survives", mentions.text.includes("look at"), mentions.text);
 
@@ -646,7 +661,7 @@ async function main(): Promise<void> {
       };
     })()`);
     check("clicking a mention opens it in the other panel",
-      afterClick.hasView && afterClick.right.includes("NOTES.md"), afterClick);
+      afterClick.hasView && afterClick.right.includes(mdName), afterClick);
     check("clicking a mention does not steal focus", afterClick.focus === focusBefore,
       { before: focusBefore, after: afterClick.focus });
     await assertNoOverflow(page);
@@ -667,7 +682,7 @@ async function main(): Promise<void> {
 
     group("wiring");
     const top = await page.eval<string>("document.querySelector('.topline')?.innerText ?? ''");
-    check("top line names the brain", /brain\s+\S/.test(top), top);
+    check("top line names the model and endpoint", /\S+\s+@\s+\S+/.test(top), top);
     check("top line shows a ctx gauge", /ctx\s+\d+\S*\/\d+/.test(top.replace(/\n/g, " ")), top);
     check("no uncaught page errors", errors.length === 0, errors);
 

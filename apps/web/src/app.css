@@ -43,6 +43,8 @@ html, body, #root {
 .topline b { color: var(--ink); font-weight: 500; }
 .topline .r { margin-left: auto; display: flex; gap: 16px; flex: none; }
 .topline .hi { color: var(--hi); }
+.topline .clickable { cursor: pointer; }
+.topline .clickable:hover { text-decoration: underline; }
 .topline .amber { color: var(--amber); }
 
 /* Two panels with a draggable gutter between them (§10). The column widths come
@@ -94,7 +96,15 @@ html, body, #root {
 .blk > .tr {
   position: absolute; top: -9px; right: 8px;
   background: var(--bg); padding: 0 5px; color: var(--dim); font-size: 11px;
+  display: flex; gap: 8px; align-items: center;
+  /* The caption plus the maximize toggle must stay inside the panel, the same way
+     the bottom caption does — otherwise a wide one runs past the viewport edge. */
+  max-width: calc(100% - 16px);
+  overflow: hidden; white-space: nowrap;
 }
+/* maximize toggle — 80% of the row, so the conversation stays in view */
+.blk > .tr .max { font-style: normal; cursor: pointer; color: var(--dim); }
+.blk > .tr .max:hover { color: var(--hi); }
 
 /* Tab strip — the v0 mockup's .tabs, inside a ratatui block. */
 .tabs {
@@ -107,6 +117,7 @@ html, body, #root {
   flex: none;
 }
 .tab {
+  cursor: pointer;
   padding: 2px 8px;
   color: var(--dim);
   border: 1px solid transparent;
@@ -163,7 +174,7 @@ html, body, #root {
 .pick-group { color: var(--amber); padding: 4px 4px 0; font-size: 11px; }
 .pick-row {
   display: flex; gap: 10px; align-items: baseline;
-  padding: 1px 4px; cursor: default;
+  padding: 2px 4px; cursor: pointer;
 }
 .pick-row.sel { background: var(--sel); color: var(--hi); }
 .pick-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -189,6 +200,7 @@ html, body, #root {
 /* files view — NC columns: name, size, date (§10) */
 .body.files { outline: none; }
 .files .row {
+  cursor: pointer;
   display: grid;
   /* minmax(0, …) on every track: without it a grid item's min-content width wins and
      a long label (".aicommander → sessions · out · viewers") pushes the row off-panel. */
@@ -300,11 +312,14 @@ html, body, #root {
 .prompt {
   border: 1px solid var(--line);
   margin-top: 10px;
-  padding: 4px 8px;
+  /* Roomier than a single line: this is where the thinking gets typed, and a
+     one-line box made every prompt feel like a search field. */
+  padding: 8px 10px;
   color: var(--ink);
   position: relative;
   flex: none;
 }
+.prompt textarea { min-height: 3.2em; }
 .blk.focus .prompt { border-color: var(--line-hi); }
 .prompt > .t {
   position: absolute; top: -9px; left: 8px;
@@ -314,6 +329,22 @@ html, body, #root {
   position: absolute; bottom: -9px; right: 8px;
   background: var(--bg); padding: 0 5px; color: var(--dim); font-size: 11px;
 }
+/* inline @path and /command completion */
+.prompt .suggest {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  margin-bottom: 6px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.suggest-row {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 1px 6px; cursor: pointer; white-space: nowrap;
+}
+.suggest-row.sel { background: var(--sel); color: var(--hi); }
+.suggest-row .dim { color: var(--dim); }
+.suggest-row.sel .dim { color: var(--hi); }
+
 /* attachment chips — what @ and the M3 + picker produce (§7) */
 .prompt .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
 .chip {
@@ -330,7 +361,7 @@ html, body, #root {
 .chip .x { font-style: normal; margin-left: 5px; color: var(--dim); cursor: pointer; }
 .chip .x:hover { color: var(--red); }
 
-.prompt .row { display: flex; align-items: flex-start; gap: 6px; }
+.prompt .row { display: flex; align-items: flex-start; gap: 8px; }
 .prompt .chev { color: var(--dim); flex: none; user-select: none; }
 .prompt textarea {
   flex: 1;
@@ -351,8 +382,13 @@ html, body, #root {
 .status .amber { color: var(--amber); }
 .status .red { color: var(--red); }
 
-.fkeys { display: flex; padding-top: 2px; }
-.fkeys span { flex: 1; color: var(--dim); white-space: nowrap; overflow: hidden; }
+.fkeys { display: flex; padding-top: 2px; gap: 2px; }
+.fkeys .fkey {
+  flex: 1; color: var(--dim); white-space: nowrap; overflow: hidden;
+  cursor: pointer; padding: 0 2px;
+}
+.fkeys .fkey:hover { background: var(--sel); }
+.fkeys .fkey:hover .ctx { color: var(--hi); }
 .fkeys b { color: var(--amber); font-weight: 500; margin-right: 3px; }
 .fkeys .ctx { color: var(--ink); }
 

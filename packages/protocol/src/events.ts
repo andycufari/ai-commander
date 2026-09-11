@@ -124,6 +124,19 @@ export const FsTreeListed = event("fs.tree", {
   paths: z.array(z.string()),
   truncated: z.boolean().default(false),
 });
+/** Reply to folders.list (§10 open folder). */
+export const FoldersListed = event("folders.listed", {
+  intentId: z.string(),
+  /** Absolute paths, recents first. */
+  folders: z.array(z.object({
+    path: z.string(),
+    recent: z.boolean().default(false),
+    /** True when it already has a .aicommander directory. */
+    known: z.boolean().default(false),
+  })),
+  /** Where the non-recent entries were listed from. */
+  under: z.string(),
+});
 export const FsWrote = event("fs.wrote", {
   intentId: z.string(),
   path: z.string(),
@@ -164,7 +177,7 @@ export const Event = z.discriminatedUnion("type", [
   JobStart, JobOutput, JobEnd,
   ShowFiles, MentionAdd, FsChanged, GitChanged,
   Toast, CompactDone, WorkspaceEvent, ErrorEvent,
-  FsListed, FsTreeListed, FsContent, FsWrote, GitResult, SessionList, SessionEvents, ConfigEvent,
+  FsListed, FsTreeListed, FoldersListed, FsContent, FsWrote, GitResult, SessionList, SessionEvents, ConfigEvent,
 ]);
 export type Event = z.infer<typeof Event>;
 export type EventType = Event["type"];
