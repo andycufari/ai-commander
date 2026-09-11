@@ -402,7 +402,11 @@ export class Loop {
     this.state(sessionId, "running", run);
 
     // Guard 6: snapshot before the brain touches anything, so this turn can be undone.
-    const snap = await takeSnapshot(root, sessionId, groupId);
+    const snap = await takeSnapshot(root, sessionId, groupId, (message) => {
+      // Rewind is useless without snapshots, so a failure is said out loud rather than
+      // leaving the navigator quietly unable to restore anything.
+      emit(ev("toast", { level: "warning", text: `snapshot failed: ${message}` }));
+    });
     if (snap) {
       await sessions.append(sessionId, {
         t: "snapshot", ts: Date.now(), group: groupId, ref: snap.ref,

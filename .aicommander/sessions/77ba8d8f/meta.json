@@ -1,0 +1,21 @@
+{
+  "id": "77ba8d8f",
+  "name": "session 77ba8d8f",
+  "model": "local-brain",
+  "created": 1789147105382,
+  "snapshots": [
+    {
+      "groupId": "gmtx7zsdv",
+      "gitRef": "refs/aicommander/77ba8d8f-gmtx7zsdv"
+    },
+    {
+      "groupId": "gmtx7zuyy",
+      "gitRef": "refs/aicommander/77ba8d8f-gmtx7zuyy"
+    },
+    {
+      "groupId": "gmtx81uec",
+      "gitRef": "refs/aicommander/77ba8d8f-gmtx81uec"
+    }
+  ],
+  "specialTools": []
+}

@@ -109,6 +109,25 @@ describe("takeSnapshot", () => {
     expect(snap!.ms).toBeGreaterThanOrEqual(0);
   });
 
+  it("recovers from a lock left by an interrupted run", async () => {
+    // A stale tmp-index.lock made every later snapshot fail silently, which is how
+    // rewind stops working without anyone noticing.
+    const root = await makeRepo();
+    await writeFile(join(root, ".aicommander", "tmp-index.lock"), "");
+    const snap = await takeSnapshot(root, "s1", "g1");
+    expect(snap).toBeTruthy();
+    expect(await snapshotPaths(root, snap!.tree)).toContain("kept.txt");
+  });
+
+  it("reports why it failed instead of going quiet", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aic-nogit2-"));
+    roots.push(root);
+    await ensureProjectDir(root);
+    let reason = "";
+    await takeSnapshot(root, "s1", "g1", (m) => { reason = m; });
+    expect(reason).toBeTruthy();
+  });
+
   it("returns undefined in a repo with no git rather than failing the turn", async () => {
     const root = await mkdtemp(join(tmpdir(), "aic-nogit-"));
     roots.push(root);

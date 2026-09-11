@@ -53,12 +53,14 @@ export async function takeSnapshot(
   root: string,
   sessionId: string,
   groupId: string,
+  onError?: (message: string) => void,
 ): Promise<Snapshot | undefined> {
   const started = Date.now();
   try {
     await mkdir(projectDir(root), { recursive: true });
-    // A stale index from a crashed run would stage the wrong thing.
-    await rm(join(projectDir(root), TMP_INDEX), { force: true });
+    // A stale index — or worse, a stale lock — from a crashed run would make every
+    // later snapshot fail silently, which is how rewind quietly stops working.
+    await clearIndex(root);
 
     // add -A respects .gitignore; the pathspecs drop what we write ourselves.
     await plumbing(root, [
@@ -71,12 +73,21 @@ export async function takeSnapshot(
     await plumbing(root, ["update-ref", ref, tree]);
 
     return { ref, tree, bytes: await treeBytes(root, tree), ms: Date.now() - started };
-  } catch {
-    // No git, or a repo in a state git will not index: the turn still runs.
+  } catch (err) {
+    // No git, or a repo in a state git will not index: the turn still runs, but the
+    // reason is worth seeing — a silently missing snapshot makes rewind useless.
+    onError?.(err instanceof Error ? err.message : String(err));
     return undefined;
   } finally {
-    await rm(join(projectDir(root), TMP_INDEX), { force: true }).catch(() => {});
+    await clearIndex(root).catch(() => {});
   }
+}
+
+/** Remove the private index and any lock left behind by an interrupted run. */
+async function clearIndex(root: string): Promise<void> {
+  const index = join(projectDir(root), TMP_INDEX);
+  await rm(index, { force: true });
+  await rm(`${index}.lock`, { force: true });
 }
 
 /** Total size of the blobs in a tree, for the cost readout. */
@@ -110,8 +121,7 @@ export async function snapshotPaths(root: string, tree: string): Promise<Set<str
  * .aicommander/ is never touched either way.
  */
 export async function restoreSnapshot(root: string, tree: string): Promise<{ written: number; deleted: number }> {
-  const indexPath = join(projectDir(root), TMP_INDEX);
-  await rm(indexPath, { force: true });
+  await clearIndex(root);
   try {
     await plumbing(root, ["read-tree", tree]);
     await plumbing(root, ["checkout-index", "-a", "-f"]);
@@ -127,7 +137,7 @@ export async function restoreSnapshot(root: string, tree: string): Promise<{ wri
     await pruneEmptyDirs(root);
     return { written: wanted.size, deleted };
   } finally {
-    await rm(indexPath, { force: true }).catch(() => {});
+    await clearIndex(root).catch(() => {});
   }
 }
 

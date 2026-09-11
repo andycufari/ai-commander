@@ -136,7 +136,6 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
       return;
     }
 
-    case "session.rewind":
     case "session.clear": {
       // Cancel anything running first: clearing under a live loop would leave the
       // turn writing into a log the user just emptied.
@@ -171,7 +170,9 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
       // only the log can be rewound, and the user should be told which happened.
       let restored: { written: number; deleted: number } | undefined;
       if (snapshot) {
-        const tree = (await git(ctx.root, ["rev-parse", `${snapshot.gitRef}^{tree}`])).trim();
+        // The ref points straight at a tree, not a commit, so `^{tree}` would fail —
+        // resolving the ref itself is what gives the tree back.
+        const tree = (await git(ctx.root, ["rev-parse", snapshot.gitRef])).trim();
         restored = await restoreSnapshot(ctx.root, tree);
       }
 
