@@ -113,3 +113,24 @@ describe("tool args", () => {
     expect(parsed).toMatchObject({ action: "commit", message: "m" });
   });
 });
+
+describe("reply events", () => {
+  it("carries the action back on a git result", () => {
+    const e = Event.parse({ id: "e3", type: "git.result", intentId: "i1", action: "log", text: "…" });
+    expect(e).toMatchObject({ type: "git.result", action: "log" });
+  });
+
+  it("rejects a git result with an unknown action", () => {
+    const bad = { id: "e4", type: "git.result", intentId: "i1", action: "rebase", text: "" };
+    expect(Event.safeParse(bad).success).toBe(false);
+  });
+
+  it("replays a session as session.events", () => {
+    const e = Event.parse({
+      id: "e5", type: "session.events", sessionId: "s1",
+      meta: { id: "s1", name: "n", model: "m", created: 1 },
+      groups: [],
+    });
+    expect(e.type).toBe("session.events");
+  });
+});

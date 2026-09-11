@@ -2,7 +2,7 @@ import { z } from "zod";
 import { Config } from "./config.js";
 import { RuleLevel } from "./rules.js";
 import { Group, SessionMeta, SessionStatus } from "./session.js";
-import { PanelMode, ToolResult } from "./tools.js";
+import { GitAction, PanelMode, ToolResult } from "./tools.js";
 import { PanelTarget, Workspace } from "./workspace.js";
 
 /** §3 server → client. `{ id, type, ...payload }`; `id` is unique per event. */
@@ -115,10 +115,14 @@ export const FsContent = event("fs.content", {
   content: z.string(),
   hash: z.string(),
 });
-export const GitResult = event("git.result", { intentId: z.string(), text: z.string() });
+export const GitResult = event("git.result", {
+  intentId: z.string(),
+  action: GitAction,
+  text: z.string(),
+});
 /** Full session list + replayed log, sent on open and on reconnect. */
 export const SessionList = event("session.list", { sessions: z.array(SessionMeta) });
-export const SessionHistory = event("session.history", {
+export const SessionEvents = event("session.events", {
   sessionId: z.string(),
   meta: SessionMeta,
   groups: z.array(Group),
@@ -132,7 +136,7 @@ export const Event = z.discriminatedUnion("type", [
   JobStart, JobOutput, JobEnd,
   OpenInPanel, MentionAdd, FsChanged, GitChanged,
   Toast, CompactDone, WorkspaceEvent, ErrorEvent,
-  FsListed, FsContent, GitResult, SessionList, SessionHistory, ConfigEvent,
+  FsListed, FsContent, GitResult, SessionList, SessionEvents, ConfigEvent,
 ]);
 export type Event = z.infer<typeof Event>;
 export type EventType = Event["type"];

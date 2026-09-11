@@ -70,32 +70,37 @@ ai-commander/
 
 WS messages are `{ id, type, ...payload }`. Client → server are **intents**; server → client are **events**. All typed with zod, exported to both sides.
 
+The envelope `id` is the message's own id: the server echoes it as `error.intentId` and on
+reply events, so a session-scoped intent names its target as `sessionId`, never `id`.
+
 Intents (client → server):
 ```
-session.create { name? }            session.open { id }        session.close { id }
-session.rename { id, name }         session.delete { id, confirm: "delete" }
-session.send { id, text, attachments: Attachment[] }        // queues if running
-session.cancel { id }               session.rewind { id, groupId, mode: "fork"|"truncate" }
-session.dropGroup { id, groupId }   session.dropToolOutput { id, groupId }
-session.compact { id }              session.clear { id }
+session.create { name? }                 session.open { sessionId }
+session.close { sessionId }              session.rename { sessionId, name }
+session.delete { sessionId, confirm: "delete" }
+session.send { sessionId, text, attachments: Attachment[] }     // queues if running
+session.cancel { sessionId }
+session.rewind { sessionId, groupId, mode: "fork"|"truncate" }
+session.dropGroup { sessionId, groupId } session.dropToolOutput { sessionId, groupId }
+session.compact { sessionId }            session.clear { sessionId }
 permission.answer { requestId, answer: "once"|"session"|"deny", editedCommand? }
 ask.answer { requestId, choice }
 options.set { scope: "session"|"project"|"global", sessionId?, patch }
 fs.list { path }  fs.read { path }  fs.write { path, content, baseHash }  fs.mkdir  fs.rename  fs.copy  fs.move  fs.delete { path, confirm }
-git.status  git.log { path?, n }  git.diff { path? }  git.commit { message }  git.checkout ...
-workspace.set { patch }             workspace.get
-viewer.list                          viewer.install { name }  (after brain writes one)
+git.status  git.log { path?, n }  git.diff { path? }  git.commit { message }  git.checkout { ref }
+workspace.set { patch }                  workspace.get
+viewer.list                              viewer.install { name }  (after brain writes one)
 ```
 
 Events (server → client):
 ```
-session.state { id, status: "idle"|"running"|"paused"|"cancelled", ctxUsed, ctxMax, toolCount, elapsed }
+session.state { sessionId, status: "idle"|"running"|"paused"|"cancelled", ctxUsed, ctxMax, toolCount, elapsed, queued? }
 turn.start { sessionId, groupId, role }
 token { sessionId, groupId, delta }                         // streaming brain text
 tool.start { sessionId, groupId, callId, name, args }
 tool.output { callId, delta }                              // streaming shell output
 tool.end { callId, ok, summary, outputPath?, truncated }
-permission.request { requestId, sessionId, tool, command, rule, reason }
+permission.request { requestId, sessionId, tool, command, rule, reason, level }
 ask.request { requestId, sessionId, question, options[] }
 job.start/job.output/job.end { jobId, ... }                // background shell jobs
 open_in_panel { path, viewer?, mode: "view"|"edit", target: "other"|"left"|"right" }
@@ -103,9 +108,20 @@ mention.add { text }                                       // viewer → prompt
 fs.changed { paths[] }                                     // chokidar
 git.changed { branch, dirty, ahead }
 toast { level: "info"|"warning", text }
-compact.done { before, after, summaryPath }
+compact.done { sessionId, before, after, summaryPath }
 workspace { ...full state }
 error { intentId?, message }
+```
+
+Reply events — these carry back the data an intent asked for. Each quotes the requesting
+intent's envelope id as `intentId` so a caller can match a reply to its own request:
+```
+fs.listed { intentId, path, entries: FsEntry[] }           // ← fs.list
+fs.content { intentId, path, content, hash }               // ← fs.read
+git.result { intentId, action, text }                      // ← any git.* intent
+session.list { sessions: SessionMeta[] }                   // on connect
+session.events { sessionId, meta, groups }                 // replayed log, on open + reconnect
+config { config }                                          // merged global+project, on connect and after options.set
 ```
 
 ---
