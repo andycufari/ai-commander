@@ -7,6 +7,7 @@ import {
 import { check } from "./permissions.js";
 import { ErrorGuard, RepeatGuard } from "./guards.js";
 import { JobRegistry } from "./jobs.js";
+import { takeSnapshot } from "./snapshots.js";
 import { resolveInRoot } from "./paths.js";
 import { BrainClient, BrainError, type BrainMessage, type ToolSpec } from "./brain.js";
 import { projectDir } from "./config.js";
@@ -73,6 +74,8 @@ export class Loop {
   private readonly askWaits = new Map<string, (choice: string) => void>();
   /** Guard 4: background jobs, keyed by id. Shared across sessions. */
   readonly jobs: JobRegistry;
+  /** Sessions already told their snapshots are slow; said once, never nagged. */
+  private readonly slowSnapshotWarned = new Set<string>();
   /** show_files calls waiting for the UI to report what it did with each path. */
   private readonly showWaits = new Map<string, (r: ShowResult[]) => void>();
 
@@ -355,6 +358,31 @@ export class Loop {
     });
     emit(ev("turn.start", { sessionId, groupId, role: "user" }));
     this.state(sessionId, "running", run);
+
+    // Guard 6: snapshot before the brain touches anything, so this turn can be undone.
+    const snap = await takeSnapshot(root, sessionId, groupId);
+    if (snap) {
+      await sessions.append(sessionId, {
+        t: "snapshot", ts: Date.now(), group: groupId, ref: snap.ref,
+      });
+      const meta = await sessions.readMeta(sessionId);
+      await sessions.writeMeta({
+        ...meta,
+        snapshots: [...meta.snapshots, { groupId, gitRef: snap.ref }],
+      });
+      emit(ev("snapshot", {
+        sessionId, groupId, ref: snap.ref, bytes: snap.bytes, ms: snap.ms,
+      }));
+      // A slow snapshot means something large is being captured that probably should
+      // not be. Said once per session — a repeated nag would just be noise.
+      if (snap.ms > 2000 && !this.slowSnapshotWarned.has(sessionId)) {
+        this.slowSnapshotWarned.add(sessionId);
+        emit(ev("toast", {
+          level: "warning",
+          text: `snapshots are taking ${(snap.ms / 1000).toFixed(1)}s — a .gitignore entry for large or generated files would speed this up`,
+        }));
+      }
+    }
 
     // M0 context: system prompt + replayed history. The full §7 assembler lands in M3.
     const messages: BrainMessage[] = [

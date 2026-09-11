@@ -10,6 +10,15 @@ import { PanelTarget, Workspace } from "./workspace.js";
 const event = <T extends string, S extends z.ZodRawShape>(type: T, shape: S) =>
   z.object({ id: z.string(), type: z.literal(type), ...shape });
 
+/** §6 guard 6: what the snapshot before this turn cost, for the status line. */
+export const SnapshotTaken = event("snapshot", {
+  sessionId: z.string(),
+  groupId: z.string(),
+  ref: z.string(),
+  bytes: z.number().int().nonnegative(),
+  ms: z.number().int().nonnegative(),
+});
+
 export const SessionStateEvent = event("session.state", {
   sessionId: z.string(),
   status: SessionStatus,
@@ -171,7 +180,7 @@ export const ConfigEvent = event("config", {
 });
 
 export const Event = z.discriminatedUnion("type", [
-  SessionStateEvent, TurnStart, Token,
+  SessionStateEvent, SnapshotTaken, TurnStart, Token,
   ToolStart, ToolOutput, ToolEnd,
   PermissionRequest, AskRequest,
   JobStart, JobOutput, JobEnd,

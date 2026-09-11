@@ -3,6 +3,13 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Group, LogEntry, SessionMeta } from "@aicommander/protocol";
 
+/** Which group a log entry belongs to, where it belongs to one. */
+export function groupOf(entry: LogEntry): string | undefined {
+  if (entry.t === "user" || entry.t === "brain" || entry.t === "tool") return entry.id;
+  if (entry.t === "snapshot" || entry.t === "cancel") return entry.group;
+  return undefined;
+}
+
 /** A file this session has touched (§11 ⌃⇧P). */
 export interface TouchedFile {
   path: string;
@@ -105,6 +112,47 @@ export class SessionStore {
     if (meta) await this.writeMeta({ ...meta, snapshots: [] });
   }
 
+  /** Replace the log wholesale — used when entries are edited, not just filtered. */
+  async replaceLog(id: string, entries: LogEntry[]): Promise<void> {
+    const lines = entries.map((e) => `${JSON.stringify(e)}\n`).join("");
+    await writeFile(join(sessionPath(this.root, id), "session.jsonl"), lines);
+  }
+
+  /** Rewrite the log, keeping only entries the predicate accepts. */
+  async rewrite(id: string, keep: (entry: LogEntry) => boolean): Promise<void> {
+    const entries = await this.read(id);
+    const lines = entries.filter(keep).map((e) => `${JSON.stringify(e)}\n`).join("");
+    await writeFile(join(sessionPath(this.root, id), "session.jsonl"), lines);
+  }
+
+  /** Everything up to and including a group — the log a fork starts from (§10). */
+  async upTo(id: string, groupId: string): Promise<LogEntry[]> {
+    const entries = await this.read(id);
+    const end = entries.findIndex((e) => groupOf(e) === groupId);
+    if (end === -1) return entries;
+    // Include the whole group, not just its first entry.
+    let last = end;
+    for (let i = end; i < entries.length; i += 1) {
+      if (groupOf(entries[i]!) === groupId) last = i;
+    }
+    return entries.slice(0, last + 1);
+  }
+
+  /** Copy a session's history into a new one, for fork (§10). */
+  async fork(from: string, groupId: string, name?: string): Promise<SessionMeta> {
+    const source = await this.readMeta(from);
+    const created = await this.create(name ?? `${source.name} (fork)`, source.model);
+    const entries = await this.upTo(from, groupId);
+    for (const entry of entries) await this.append(created.id, entry);
+    await this.writeMeta({
+      ...created,
+      forkedFrom: from,
+      specialTools: source.specialTools,
+      options: source.options,
+    });
+    return this.readMeta(created.id);
+  }
+
   async delete(id: string): Promise<void> {
     await rm(sessionPath(this.root, id), { recursive: true, force: true });
   }
@@ -188,6 +236,8 @@ export class SessionStore {
         case "tool": {
           const g = get(e.id, e.ts);
           g.toolCount += 1;
+          // Counted from the log, so the navigator shows what a group actually cost
+          // rather than a guess made at render time.
           g.tokens += e.tokens;
           break;
         }

@@ -22,7 +22,8 @@ async function readRecents(): Promise<string[]> {
 }
 import { resolveInRoot, toRepoPath } from "./paths.js";
 import { globFiles } from "./tools.js";
-import { SessionStore } from "./sessions.js";
+import { groupOf, SessionStore } from "./sessions.js";
+import { pruneSnapshots, restoreSnapshot } from "./snapshots.js";
 import type { Loop } from "./loop.js";
 import type { WorkspaceStore } from "./workspace.js";
 import { join } from "node:path";
@@ -145,8 +146,90 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
       return;
     }
 
-    case "session.dropGroup":
-    case "session.dropToolOutput":
+    case "session.rewind": {
+      const meta = await ctx.sessions.readMeta(intent.sessionId);
+      const snapshot = meta.snapshots.find((s) => s.groupId === intent.groupId);
+
+      // Restoring the tree is what makes a rewind mean something; without a snapshot
+      // only the log can be rewound, and the user should be told which happened.
+      let restored: { written: number; deleted: number } | undefined;
+      if (snapshot) {
+        const tree = (await git(ctx.root, ["rev-parse", `${snapshot.gitRef}^{tree}`])).trim();
+        restored = await restoreSnapshot(ctx.root, tree);
+      }
+
+      if (intent.mode === "fork") {
+        const forked = await ctx.sessions.fork(intent.sessionId, intent.groupId);
+        ctx.broadcast(ev("session.list", { sessions: await ctx.sessions.list() }));
+        const entries = await ctx.sessions.read(forked.id);
+        ctx.send(ev("session.events", {
+          sessionId: forked.id, meta: forked,
+          groups: SessionStore.toGroups(forked.id, entries),
+          touched: SessionStore.touchedFiles(entries),
+        }));
+      } else {
+        // Truncate in place: everything after this group goes, refs included.
+        const keepGroups = new Set(
+          SessionStore.toGroups(intent.sessionId, await ctx.sessions.upTo(intent.sessionId, intent.groupId))
+            .map((g) => g.id),
+        );
+        for (const snap of meta.snapshots) {
+          if (!keepGroups.has(snap.groupId)) {
+            await pruneSnapshots(ctx.root, intent.sessionId, snap.groupId);
+          }
+        }
+        await ctx.sessions.rewrite(intent.sessionId, (e) => {
+          const g = groupOf(e);
+          return g === undefined || keepGroups.has(g);
+        });
+        await ctx.sessions.writeMeta({
+          ...meta,
+          snapshots: meta.snapshots.filter((s) => keepGroups.has(s.groupId)),
+        });
+        await sendSession(ctx, intent.sessionId);
+      }
+
+      ctx.broadcast(ev("fs.changed", { paths: [] }));
+      ctx.broadcast(ev("toast", {
+        level: "info",
+        text: restored
+          ? `rewound · ${restored.written} files restored, ${restored.deleted} removed`
+          : "rewound the conversation (no snapshot for that turn)",
+      }));
+      return;
+    }
+
+    case "session.dropGroup": {
+      await ctx.sessions.rewrite(intent.sessionId, (e) => groupOf(e) !== intent.groupId);
+      await pruneSnapshots(ctx.root, intent.sessionId, intent.groupId);
+      const meta = await ctx.sessions.readMeta(intent.sessionId);
+      await ctx.sessions.writeMeta({
+        ...meta,
+        snapshots: meta.snapshots.filter((s) => s.groupId !== intent.groupId),
+      });
+      await sendSession(ctx, intent.sessionId);
+      return;
+    }
+
+    case "session.dropToolOutput": {
+      // Keep the summaries — the shape of what happened is the useful part — and drop
+      // the captured output files that made the group expensive.
+      const entries = await ctx.sessions.read(intent.sessionId);
+      for (const e of entries) {
+        if (e.t === "tool" && e.id === intent.groupId && e.outputPath) {
+          await rm(join(ctx.root, e.outputPath), { force: true }).catch(() => {});
+        }
+      }
+      const rewritten = entries.map((e) =>
+        e.t === "tool" && e.id === intent.groupId
+          ? { ...e, outputPath: null, tokens: 0 }
+          : e);
+      await ctx.sessions.replaceLog(intent.sessionId, rewritten);
+      await sendSession(ctx, intent.sessionId);
+      ctx.broadcast(ev("toast", { level: "info", text: "dropped tool output" }));
+      return;
+    }
+
     case "session.compact":
       throw new Error(`${intent.type} arrives with the agent loop`);
 
@@ -333,15 +416,39 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
   }
 }
 
-/** git is shelled out to, per §1 — reliability over libraries. */
-export async function git(root: string, args: string[]): Promise<string> {
+/**
+ * git is shelled out to, per §1 — reliability over libraries.
+ *
+ * `env` exists for the snapshot plumbing, which sets GIT_INDEX_FILE so staging happens
+ * in a private index and the user's own `git add` is never disturbed.
+ */
+export async function git(
+  root: string,
+  args: string[],
+  env?: Record<string, string>,
+): Promise<string> {
   try {
-    const { stdout, stderr } = await run("git", args, { cwd: root, maxBuffer: 16 * 1024 * 1024 });
+    const { stdout, stderr } = await run("git", args, {
+      cwd: root,
+      maxBuffer: 16 * 1024 * 1024,
+      ...(env ? { env: { ...process.env, ...env } } : {}),
+    });
     return stdout || stderr;
   } catch (err) {
     const e = err as { stdout?: string; stderr?: string; message: string };
     throw new Error((e.stderr || e.stdout || e.message).trim());
   }
+}
+
+/** Send a session's replayed state to every client. */
+export async function sendSession(ctx: Ctx, sessionId: string): Promise<void> {
+  const meta = await ctx.sessions.readMeta(sessionId);
+  const entries = await ctx.sessions.read(sessionId);
+  ctx.broadcast(ev("session.events", {
+    sessionId, meta,
+    groups: SessionStore.toGroups(sessionId, entries),
+    touched: SessionStore.touchedFiles(entries),
+  }));
 }
 
 export async function emitGitState(ctx: Ctx): Promise<void> {
