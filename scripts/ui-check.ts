@@ -287,7 +287,10 @@ async function openViaFiles(page: Page, steps: string[]): Promise<void> {
   await page.reload();
   await sleep(2500);
   await key(page, "Tab");
-  await key(page, "t", { ctrl: true, settle: 900 });
+  // ⌃T is the pick modal; its "files" entry is what opens a files tab.
+  await key(page, "t", { ctrl: true, settle: 400 });
+  await key(page, "ArrowDown", { settle: 120 });
+  await key(page, "Enter", { settle: 900 });
   for (const k of steps) {
     await key(page, k, { focus: ".files", settle: k === "Enter" ? 900 : 250 });
   }
@@ -341,9 +344,12 @@ async function main(): Promise<void> {
     const start = await tabState();
     check("a lone tab hides the strip", start.strip === 0, start);
 
-    await key(page, "t", { ctrl: true, settle: 250 });
+    // ⌃T is the pick modal now; "files" in it opens the files tab.
+    await key(page, "t", { ctrl: true, settle: 400 });
+    await key(page, "ArrowDown", { settle: 120 });
+    await key(page, "Enter", { settle: 700 });
     const opened = await tabState();
-    check("⌃T opens a tab and shows the strip", opened.strip === 2, opened);
+    check("the pick menu opens a files tab and shows the strip", opened.strip === 2, opened);
     check("the new tab takes the panel title", opened.title.startsWith("files"), opened.title);
     check("the F-bar follows the focused view", opened.bar.includes("mkdir"), opened.bar);
     await assertTitlesNotClipped(page);
@@ -369,7 +375,9 @@ async function main(): Promise<void> {
     await sleep(2500);
     // Open a files tab in the right panel and drive the NC keys.
     await key(page, "Tab");
-    await key(page, "t", { ctrl: true, settle: 900 });
+    await key(page, "t", { ctrl: true, settle: 400 });
+    await key(page, "ArrowDown", { settle: 120 });
+    await key(page, "Enter", { settle: 900 });
 
     const fileKey = (k: string, ctrl = false): Promise<void> =>
       key(page, k, { ctrl, focus: ".files", settle: 240 });
@@ -461,6 +469,61 @@ async function main(): Promise<void> {
       /board\.png/.test(img.caption) && /\d+×\d+/.test(img.caption), img.caption);
     check("image starts fitted", /\(fit\)/.test(img.caption), img.caption);
     await assertSurvivesResize(page, ".body.image", "image viewer");
+
+    group("pickers");
+    await page.reload();
+    await sleep(2500);
+    const modalState = () => page.eval<{ title: string; rows: string[]; hint: string } | null>(
+      `(() => { const m = document.querySelector('.modal.pick');
+        return m ? { title: m.querySelector('.t')?.textContent ?? '',
+          rows: [...m.querySelectorAll('.pick-row')].map(r => r.textContent ?? ''),
+          hint: m.querySelector('.k')?.textContent ?? '' } : null; })()`);
+
+    await key(page, "t", { ctrl: true, settle: 400 });
+    const menu = await modalState();
+    check("⌃T opens the pick modal", menu !== null, menu);
+    check("the menu offers a new session and file choices",
+      !!menu && menu.rows.some((r) => r.includes("new session")) && menu.rows.some((r) => r.includes("file")),
+      menu?.rows);
+    check("the pick modal is info tier",
+      await page.eval<boolean>(`!!document.querySelector('.modal.info.pick')`));
+    await assertNoOverflow(page);
+
+    await key(page, "Escape", { settle: 300 });
+    check("Esc closes the pick modal", (await modalState()) === null);
+
+    await key(page, "p", { ctrl: true, settle: 900 });
+    const files = await modalState();
+    check("⌃P lists repo files", !!files && files.rows.length > 0, files?.rows.slice(0, 4));
+    check("⌃P hints both open targets",
+      !!files && files.hint.includes("here") && files.hint.includes("other"), files?.hint);
+
+    for (const ch of "notes") await key(page, ch, { settle: 80 });
+    await sleep(300);
+    const filtered = await modalState();
+    check("typing filters the list fuzzily",
+      !!filtered && filtered.rows.length < (files?.rows.length ?? 0) &&
+        filtered.rows.some((r) => r.toLowerCase().includes("notes")),
+      filtered?.rows);
+
+    await key(page, "Enter", { settle: 900 });
+    check("⏎ opens the picked file", (await modalState()) === null &&
+      await page.eval<boolean>(`!!document.querySelector('.body.md, .body.cm, .body.image')`));
+
+    await key(page, "p", { ctrl: true, shift: true, settle: 500 });
+    const touched = await modalState();
+    check("⌃⇧P lists the files this session touched", touched !== null, touched?.rows);
+    await key(page, "Escape", { settle: 250 });
+
+    group("panel focus keys");
+    await key(page, "2", { ctrl: true, settle: 250 });
+    const rightFocused = await page.eval<number>(
+      `[...document.querySelectorAll('.cols > .blk')].findIndex(b => b.classList.contains('focus'))`);
+    check("⌃2 focuses the right panel", rightFocused === 1, { index: rightFocused });
+    await key(page, "1", { ctrl: true, settle: 250 });
+    const leftFocused = await page.eval<number>(
+      `[...document.querySelectorAll('.cols > .blk')].findIndex(b => b.classList.contains('focus'))`);
+    check("⌃1 focuses the left panel", leftFocused === 0, { index: leftFocused });
 
     group("mentions");
     await page.reload();

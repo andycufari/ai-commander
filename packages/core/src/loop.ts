@@ -13,15 +13,18 @@ import { SessionStore } from "./sessions.js";
 
 const CORE_ENABLED = [
   "read_file", "write_file", "edit_file", "glob", "grep", "shell", "git",
-  "open_in_panel", "list_skills", "read_skill",
+  "show_files", "list_skills", "read_skill",
 ] as const;
 
-/** What the UI reports back about an open_in_panel request. */
-export interface PanelOutcome {
+/** What the UI reports back about one path of a show_files request. */
+export interface ShowResult {
+  path: string;
   outcome: "opened" | "already-open" | "not-found";
-  side?: "left" | "right";
   view?: string;
+  side?: "left" | "right";
 }
+
+
 
 export interface LoopDeps {
   root: string;
@@ -43,8 +46,8 @@ interface Running {
 
 export class Loop {
   private readonly running = new Map<string, Running>();
-  /** open_in_panel calls waiting for the UI to say what it did. */
-  private readonly panelWaits = new Map<string, (r: PanelOutcome) => void>();
+  /** show_files calls waiting for the UI to report what it did with each path. */
+  private readonly showWaits = new Map<string, (r: ShowResult[]) => void>();
 
   constructor(private readonly deps: LoopDeps) {}
 
@@ -60,91 +63,97 @@ export class Loop {
     return true;
   }
 
-  /** The UI answering an open_in_panel request (§5). */
-  resolvePanel(requestId: string, outcome: PanelOutcome): boolean {
-    const waiter = this.panelWaits.get(requestId);
+  /** The UI answering a show_files request (§5). */
+  resolveShow(requestId: string, results: ShowResult[], side?: "left" | "right"): boolean {
+    const waiter = this.showWaits.get(requestId);
     if (!waiter) return false;
-    this.panelWaits.delete(requestId);
-    waiter(outcome);
+    this.showWaits.delete(requestId);
+    waiter(results.map((r) => ({ ...r, side })));
     return true;
   }
 
   /**
-   * open_in_panel runs here rather than in tools.ts: only the UI knows which panel is
-   * focused and what is already open, so the tool emits an event and waits for the
-   * answer. A UI that never replies must not wedge the loop, hence the timeout.
+   * §5 show_files. The brain names paths; the app decides how each is displayed, so
+   * nothing here knows what a .stl or a .kicad_sch is. Existence is checked first, so
+   * "not found" is authoritative rather than a UI guess, and the loop still reports
+   * something if the UI never answers.
    */
-  private async openInPanel(
-    sessionId: string,
-    args: Record<string, unknown>,
-    signal: AbortSignal,
-  ): Promise<ToolResult> {
-    const parsed = ToolArgs.open_in_panel.safeParse(args);
+  private async showFiles(args: Record<string, unknown>, signal: AbortSignal): Promise<ToolResult> {
+    const parsed = ToolArgs.show_files.safeParse(args);
     if (!parsed.success) {
-      return { ok: false, summary: "bad arguments", content: parsed.error.message, truncated: false };
-    }
-    const { path, mode, viewer } = parsed.data;
-
-    // Check the file before asking the UI, so "not found" is authoritative.
-    try {
-      const abs = await resolveInRoot(this.deps.root, path);
-      const info = await stat(abs);
-      if (!info.isFile()) {
-        return { ok: false, summary: `${path} is not a file`, content: `${path} is a directory.`, truncated: false };
-      }
-    } catch (err) {
       return {
         ok: false,
-        summary: `no such file: ${path}`,
-        content: err instanceof Error ? err.message : `Cannot open ${path}.`,
+        summary: "bad arguments",
+        content: `show_files takes { paths: string[] } with 1-5 entries. ${parsed.error.issues[0]?.message ?? ""}`,
+        truncated: false,
+      };
+    }
+
+    const missing: string[] = [];
+    const openable: string[] = [];
+    for (const path of parsed.data.paths) {
+      try {
+        const abs = await resolveInRoot(this.deps.root, path);
+        const info = await stat(abs);
+        if (info.isFile()) openable.push(path);
+        else missing.push(path);
+      } catch {
+        missing.push(path);
+      }
+    }
+
+    if (openable.length === 0) {
+      return {
+        ok: false,
+        summary: `no such file${missing.length === 1 ? "" : "s"}`,
+        content: `Could not show ${missing.join(", ")} — no such file in the repo.`,
         truncated: false,
       };
     }
 
     const requestId = randomUUID().slice(0, 8);
-    const outcome = await new Promise<PanelOutcome>((resolve) => {
+    const results = await new Promise<ShowResult[]>((resolve) => {
+      const fallback = (): ShowResult[] =>
+        openable.map((path) => ({ path, outcome: "opened" as const }));
       const timer = setTimeout(() => {
-        this.panelWaits.delete(requestId);
-        resolve({ outcome: "opened" });
+        this.showWaits.delete(requestId);
+        resolve(fallback());
       }, 3000);
       const onAbort = (): void => {
         clearTimeout(timer);
-        this.panelWaits.delete(requestId);
-        resolve({ outcome: "opened" });
+        this.showWaits.delete(requestId);
+        resolve(fallback());
       };
       signal.addEventListener("abort", onAbort, { once: true });
-      this.panelWaits.set(requestId, (r) => {
+      this.showWaits.set(requestId, (r) => {
         clearTimeout(timer);
         signal.removeEventListener("abort", onAbort);
         resolve(r);
       });
-      this.deps.emit(ev("open_in_panel", { path, mode: mode ?? "view", viewer, target: "other", requestId }));
+      this.deps.emit(ev("show_files", { paths: openable, target: "other", requestId }));
     });
 
-    const where = outcome.side ? `the ${outcome.side} panel` : "the other panel";
-    switch (outcome.outcome) {
-      case "already-open":
-        return {
-          ok: true,
-          summary: `${path} already open`,
-          content: `${path} was already open in ${where}; brought it to the front.`,
-          truncated: false,
-        };
-      case "not-found":
-        return {
-          ok: false,
-          summary: `could not open ${path}`,
-          content: `The user interface could not open ${path}.`,
-          truncated: false,
-        };
-      default:
-        return {
-          ok: true,
-          summary: `opened ${path}`,
-          content: `${path} is now showing in ${where}. The user can see it.`,
-          truncated: false,
-        };
-    }
+    const side = results[0]?.side;
+    const where = side ? `the ${side} panel` : "the other panel";
+    const opened = results.filter((r) => r.outcome === "opened").map((r) => r.path);
+    const already = results.filter((r) => r.outcome === "already-open").map((r) => r.path);
+    const failed = [...missing, ...results.filter((r) => r.outcome === "not-found").map((r) => r.path)];
+
+    const lines: string[] = [];
+    if (opened.length) lines.push(`Showing ${opened.join(", ")} in ${where}.`);
+    if (already.length) lines.push(`${already.join(", ")} was already open; brought to the front.`);
+    if (failed.length) lines.push(`Could not show ${failed.join(", ")} — no such file.`);
+    lines.push("The user can see these now; they do not need you to paste the contents.");
+
+    const shown = opened.length + already.length;
+    return {
+      ok: shown > 0,
+      summary: failed.length
+        ? `showed ${shown}, ${failed.length} missing`
+        : `showed ${shown} file${shown === 1 ? "" : "s"}`,
+      content: lines.join(" "),
+      truncated: false,
+    };
   }
 
   /** A message sent while the loop runs is queued, not dropped (§6 guard 5). */
@@ -239,8 +248,8 @@ export class Loop {
           };
 
           const res: ToolResult =
-            call.name === "open_in_panel"
-              ? await this.openInPanel(sessionId, call.args, controller.signal)
+            call.name === "show_files"
+              ? await this.showFiles(call.args, controller.signal)
               : await runTool(call.name, call.args, ctx);
 
           emit(ev("tool.end", {
@@ -283,6 +292,19 @@ export class Loop {
       }
       this.running.delete(sessionId);
       this.state(sessionId, cancelled ? "cancelled" : "idle", run);
+      // The turn may have touched files; refresh the ⌃⇧P list rather than leaving the
+      // UI with what it had at session open.
+      try {
+        const entries = await sessions.read(sessionId);
+        emit(ev("session.events", {
+          sessionId,
+          meta: await sessions.readMeta(sessionId),
+          groups: SessionStore.toGroups(sessionId, entries),
+          touched: SessionStore.touchedFiles(entries),
+        }));
+      } catch {
+        // a session deleted mid-turn: nothing to refresh
+      }
     }
   }
 

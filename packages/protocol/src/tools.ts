@@ -12,7 +12,7 @@ export const CORE_TOOL_NAMES = [
   "shell",
   "job",
   "git",
-  "open_in_panel",
+  "show_files",
   "ask_user",
   "list_skills",
   "read_skill",
@@ -63,10 +63,8 @@ export const ToolArgs = {
   }),
   job: z.object({ action: JobAction, jobId: z.string() }),
   git: z.object({ action: GitAction }).passthrough(),
-  open_in_panel: z.object({
-    path: z.string(),
-    mode: PanelMode.optional(),
-    viewer: z.string().optional(),
+  show_files: z.object({
+    paths: z.array(z.string()).min(1).max(5),
   }),
   ask_user: z.object({ question: z.string(), options: z.array(z.string()).min(1) }),
   list_skills: z.object({}),
@@ -89,13 +87,13 @@ export const TOOL_DESCRIPTIONS: Record<keyof typeof ToolArgs, string> = {
   shell: "Run a shell command in the repo. On timeout the process keeps running as a background job and you get a jobId.",
   job: "Inspect or kill a background shell job.",
   git: "Run a git action: status, log, diff, add, commit, checkout, branch, stash, push.",
-  open_in_panel:
-    "Show a file to the user. Call this when you want them to SEE a file, not just when " +
-    "you have read it: the file you just changed, the image or diagram you are describing, " +
-    "the config you are asking them about. It opens in whichever panel they are not using " +
-    "and never steals their focus or interrupts their typing, so it is cheap to call — but " +
-    "it is for files worth their attention, not every file you touch. " +
-    "mode \"view\" renders it (markdown, images); \"edit\" opens it in the editor.",
+  show_files:
+    "Put files in front of the user. Call this whenever you want them to LOOK at " +
+    "something: a file you just changed, an image or diagram you are discussing, data " +
+    "you want them to check. The app picks the right way to display each one — rendered " +
+    "markdown, an image, a 3D model, a schematic, a table — so just give the paths and " +
+    "do not worry about how. Files appear beside the conversation without interrupting " +
+    "what the user is typing. Up to 5 at once.",
   ask_user: "Ask the user a question with a fixed set of choices. The loop pauses until they answer.",
   list_skills: "List available skills with their descriptions.",
   read_skill: "Read the full text of a skill by name.",

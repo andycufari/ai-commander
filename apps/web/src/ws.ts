@@ -1,6 +1,6 @@
 import { randomUUID } from "./id.js";
 import { toolPath } from "./mentions.js";
-import type { Config, Event, Group, Intent, SessionMeta } from "@aicommander/protocol";
+import type { Config, Event, Group, Intent, SessionMeta, TouchedFile } from "@aicommander/protocol";
 
 /**
  * The browser only renders and sends intents (§2) — all state lives in the backend,
@@ -39,6 +39,8 @@ export interface UiState {
   ctxMax: number;
   queued?: string;
   git?: { branch: string; dirty: number; ahead: number };
+  /** Files this session has touched, for ⌃⇧P (§11). Writes first, recent first. */
+  touched: TouchedFile[];
   error?: string;
 }
 
@@ -52,6 +54,7 @@ export const initialState: UiState = {
   elapsed: 0,
   ctxUsed: 0,
   ctxMax: 0,
+  touched: [],
 };
 
 /** Local echo: the backend's turn.start carries no text, so a sent message would not
@@ -68,9 +71,18 @@ export function reduce(state: UiState, event: Event): UiState {
     case "session.list":
       return { ...state, sessions: event.sessions, sessionsLoaded: true };
 
-    case "session.events":
-      // Replaces the transcript wholesale, which also clears any optimistic echoes.
-      return { ...state, sessionId: event.sessionId, rows: groupsToRows(event.groups) };
+    case "session.events": {
+      // Sent on open *and* after every turn, to refresh the touched list. Replaying the
+      // transcript on the post-turn refresh would drop the streamed tool rows, which the
+      // groups do not carry — so rows are only rebuilt when the session actually changes.
+      const sameSession = state.sessionId === event.sessionId;
+      return {
+        ...state,
+        sessionId: event.sessionId,
+        rows: sameSession && state.rows.length > 0 ? state.rows : groupsToRows(event.groups),
+        touched: event.touched,
+      };
+    }
 
     case "session.state":
       return {

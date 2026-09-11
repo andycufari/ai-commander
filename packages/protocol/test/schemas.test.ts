@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  Config, DEFAULT_RULES, Event, Intent, LogEntry, Rules, Workspace, ToolArgs,
+  Config, CORE_TOOL_NAMES, DEFAULT_RULES, Event, Intent, LogEntry, Rules,
+  TOOL_DESCRIPTIONS, ToolArgs, Workspace,
 } from "../src/index.js";
 
 describe("config", () => {
@@ -68,9 +69,9 @@ describe("events", () => {
     expect(e.type).toBe("token");
   });
 
-  it("defaults open_in_panel to viewing the other panel", () => {
-    const e = Event.parse({ id: "e2", type: "open_in_panel", path: "main.c" });
-    expect(e).toMatchObject({ mode: "view", target: "other" });
+  it("defaults show_files to the other panel", () => {
+    const e = Event.parse({ id: "e2", type: "show_files", paths: ["main.c"] });
+    expect(e).toMatchObject({ target: "other" });
   });
 });
 
@@ -134,3 +135,31 @@ describe("reply events", () => {
     expect(e.type).toBe("session.events");
   });
 });
+
+describe("model-facing tools", () => {
+  it("does not offer open_in_panel to the model", () => {
+    // §5: the harness opens files itself on write; the model gets no panel tool.
+    expect(CORE_TOOL_NAMES).not.toContain("open_in_panel");
+  });
+
+  it("offers show_files instead", () => {
+    expect(CORE_TOOL_NAMES).toContain("show_files");
+    expect(ToolArgs.show_files.safeParse({ paths: ["a.md"] }).success).toBe(true);
+  });
+
+  it("caps show_files at five paths", () => {
+    expect(ToolArgs.show_files.safeParse({ paths: ["a", "b", "c", "d", "e"] }).success).toBe(true);
+    expect(ToolArgs.show_files.safeParse({ paths: ["a", "b", "c", "d", "e", "f"] }).success).toBe(false);
+    expect(ToolArgs.show_files.safeParse({ paths: [] }).success).toBe(false);
+  });
+
+  it("describes every tool it does offer", () => {
+    for (const name of CORE_TOOL_NAMES) {
+      const description = TOOL_DESCRIPTIONS[name as keyof typeof TOOL_DESCRIPTIONS];
+      expect(description, `${name} has no description`).toBeTruthy();
+      expect(description.length, `${name}'s description is too terse to guide a model`)
+        .toBeGreaterThan(20);
+    }
+  });
+});
+

@@ -9,6 +9,7 @@ import {
 } from "@aicommander/protocol";
 import { projectDir } from "./config.js";
 import { resolveInRoot, toRepoPath } from "./paths.js";
+import { globFiles } from "./tools.js";
 import { SessionStore } from "./sessions.js";
 import type { Loop } from "./loop.js";
 import { join } from "node:path";
@@ -37,7 +38,7 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
     case "session.create": {
       const meta = await ctx.sessions.create(intent.name, ctx.config.brain.model);
       ctx.broadcast(ev("session.list", { sessions: await ctx.sessions.list() }));
-      ctx.send(ev("session.events", { sessionId: meta.id, meta, groups: [] }));
+      ctx.send(ev("session.events", { sessionId: meta.id, meta, groups: [], touched: [] }));
       return;
     }
 
@@ -48,6 +49,7 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
         sessionId: meta.id,
         meta,
         groups: SessionStore.toGroups(meta.id, entries),
+        touched: SessionStore.touchedFiles(entries),
       }));
       ctx.send(ev("session.state", {
         sessionId: meta.id,
@@ -97,12 +99,8 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
       return;
     }
 
-    case "panel.opened": {
-      ctx.loop.resolvePanel(intent.requestId, {
-        outcome: intent.outcome,
-        side: intent.side,
-        view: intent.view,
-      });
+    case "files.shown": {
+      ctx.loop.resolveShow(intent.requestId, intent.results, intent.side);
       return;
     }
 
@@ -136,6 +134,19 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
       // Directories first, then name — the NC ordering the files view expects (§10).
       entries.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1));
       ctx.send(ev("fs.listed", { intentId: intent.id, path: toRepoPath(ctx.root, abs), entries }));
+      return;
+    }
+
+    case "fs.tree": {
+      // globFiles already skips node_modules/.git/dist/.aicommander, which is what
+      // makes this usable as a fuzzy-open source rather than a wall of build output.
+      const all = await globFiles(ctx.root, "**/*");
+      const paths = all.slice(0, intent.limit);
+      ctx.send(ev("fs.tree", {
+        intentId: intent.id,
+        paths,
+        truncated: all.length > paths.length,
+      }));
       return;
     }
 

@@ -2,6 +2,14 @@ import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/pro
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Group, LogEntry, SessionMeta } from "@aicommander/protocol";
+
+/** A file this session has touched (§11 ⌃⇧P). */
+export interface TouchedFile {
+  path: string;
+  kind: "written" | "read" | "mentioned";
+  /** When it was last touched. */
+  ts: number;
+}
 import { projectDir } from "./config.js";
 
 /** §4: session.jsonl is the source of truth; everything else is derived from it. */
@@ -84,6 +92,57 @@ export class SessionStore {
 
   async delete(id: string): Promise<void> {
     await rm(sessionPath(this.root, id), { recursive: true, force: true });
+  }
+
+  /**
+   * Every file this session has touched, for the ⌃⇧P modal (§11).
+   *
+   * Derived from the log rather than from UI state, so it survives a reload and stays
+   * per-session — "the files this conversation is about" is the useful set. Writes sort
+   * first and are marked, because the thing you most often want to look at is what the
+   * brain just changed; within each kind, most recent first.
+   */
+  static touchedFiles(entries: LogEntry[]): TouchedFile[] {
+    const byPath = new Map<string, TouchedFile>();
+
+    const note = (path: string, kind: TouchedFile["kind"], ts: number): void => {
+      const prev = byPath.get(path);
+      // A file written at any point counts as written, even if later only read.
+      const rank = { written: 2, mentioned: 1, read: 0 } as const;
+      if (prev && rank[prev.kind] >= rank[kind]) {
+        prev.ts = Math.max(prev.ts, ts);
+        return;
+      }
+      byPath.set(path, { path, kind, ts: Math.max(ts, prev?.ts ?? 0) });
+    };
+
+    for (const e of entries) {
+      if (e.t === "tool") {
+        if (!e.ok) continue;
+        const args = e.args as { path?: unknown; paths?: unknown };
+        if (e.name === "write_file" || e.name === "edit_file") {
+          if (typeof args.path === "string" && args.path) note(args.path, "written", e.ts);
+        } else if (e.name === "read_file") {
+          if (typeof args.path === "string" && args.path) note(args.path, "read", e.ts);
+        } else if (e.name === "show_files") {
+          // show_files takes an array; every path the brain chose to surface counts.
+          for (const p of Array.isArray(args.paths) ? args.paths : []) {
+            if (typeof p === "string" && p) note(p, "read", e.ts);
+          }
+        }
+      } else if (e.t === "user") {
+        for (const a of e.attachments) {
+          if (a.kind === "file") note(a.path, "mentioned", e.ts);
+        }
+      }
+    }
+
+    return [...byPath.values()].sort((a, b) => {
+      const aw = a.kind === "written" ? 1 : 0;
+      const bw = b.kind === "written" ? 1 : 0;
+      if (aw !== bw) return bw - aw;
+      return b.ts - a.ts;
+    });
   }
 
   /** Replay the log into groups — the unit the UI renders and rewind operates on (§4). */

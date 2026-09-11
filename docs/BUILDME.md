@@ -87,7 +87,7 @@ permission.answer { requestId, answer: "once"|"session"|"deny", editedCommand? }
 ask.answer { requestId, choice }
 panel.opened { requestId, outcome: "opened"|"already-open"|"not-found", side?, view? }
 options.set { scope: "session"|"project"|"global", sessionId?, patch }
-fs.list { path }  fs.read { path }  fs.write { path, content, baseHash }  fs.mkdir  fs.rename  fs.copy  fs.move  fs.delete { path, confirm }
+fs.list { path }  fs.tree { limit? }  fs.read { path }  fs.write { path, content, baseHash }  fs.mkdir  fs.rename  fs.copy  fs.move  fs.delete { path, confirm }
 git.status  git.log { path?, n }  git.diff { path? }  git.commit { message }  git.checkout { ref }
 workspace.set { patch }                  workspace.get
 viewer.list                              viewer.install { name }  (after brain writes one)
@@ -118,6 +118,7 @@ Reply events — these carry back the data an intent asked for. Each quotes the 
 intent's envelope id as `intentId` so a caller can match a reply to its own request:
 ```
 fs.listed { intentId, path, entries: FsEntry[] }           // ← fs.list
+fs.tree { intentId, paths[], truncated }                   // ← fs.tree (⌃P)
 fs.content { intentId, path, content, hash }               // ← fs.read
 fs.wrote { intentId, path, hash }                          // ← fs.write
 git.result { intentId, action, text }                      // ← any git.* intent
@@ -179,7 +180,7 @@ Sqlite (`index.sqlite`) is a derived index — rebuildable from jsonl. Tables: `
 | `shell { cmd, cwd?, timeout? }` | see §6 for timeout → background, permission rules |
 | `job { action: "status"\|"output"\|"kill", jobId }` | background shell jobs |
 | `git { action, ...}` | status, log, diff, add, commit, checkout, branch, stash. `push` and history rewrites go through permission rules |
-| `open_in_panel { path, mode?, viewer? }` | opens in the non-focused panel; never steals focus |
+| ~~`open_in_panel`~~ | **not a model tool.** The harness opens files itself — see auto-open below |
 | `ask_user { question, options[] }` | renders an info modal; loop pauses; answer returned as tool result |
 | `list_skills {}` / `read_skill { name }` | index is already in system prompt; this pulls full content |
 
@@ -237,7 +238,7 @@ Auto-compact at 75% ctx: summarize groups older than the last 6, keep all file e
 
 Built fresh every turn, in this order, each layer a separate system/user block:
 
-1. **harness manual** — `.aicommander/system.md`. Explains panels, `open_in_panel`, mentions, permissions, modes, `ask_user`, `sql`, viewers. The brain's UX contract. Editable in-app (F4 → editor in other panel).
+1. **harness manual** — `.aicommander/system.md`. Explains panels, auto-open, mentions, permissions, modes, `ask_user`, `sql`, viewers. The brain's UX contract. Editable in-app (F4 → editor in other panel).
 2. **project boot** — from `config.json.boot`, default `["AGENTS.md", "CLAUDE.md", "BOOT.md", "SOUL.md", "rules/"]`; loaded in order if present (AGENTS or CLAUDE, first found, unless both listed explicitly).
 3. **skills index** — `skills/*/SKILL.md` frontmatter → `name — description`, one line each.
 4. **tools** — core + enabled special tools (schemas go in the API `tools` field, not the prompt).
@@ -297,13 +298,14 @@ Reference: `v1-commander.html` for screens, `v2-modals-options.html` for modals.
 ### Shell
 - Top line: app name, repo path, git branch + state, brain + endpoint, ctx used/max.
 - Two panels, gutter draggable and `⌃←/→` (5% steps), persisted. `⌃B` collapses the other panel; again restores.
-- Panel = tabbed **view host**. Views: `chat`, `files`, `editor`, `viewer`, `log`, `sql`. Tabs `⌃T` new, `⌃W` close, `⌃⇥` cycle.
+- Panel = tabbed **view host**. Views: `chat`, `files`, `editor`, `viewer`, `log`, `sql`. `⌃W` close, `⌃⇥` cycle.
+- A file the brain writes or edits opens itself in the other panel (§5 auto-open), activating an existing tab rather than duplicating it. Never moves focus.
 - Focus = bright border. `Tab` swaps panel focus.
 - Status line: mode-specific hints left, state right (idle / running · n tools · elapsed / files changed / saved).
 - F-key bar: context-relative (see §11). Ctrl+1..0 mirror F1..F10 in web mode.
 
 ### Views
-- **chat** — message list, tool calls rendered as collapsed one-liners (click/`Space` expands), mentions clickable → `open_in_panel`. Prompt attached at bottom: multiline (`⇧⏎`), grows to 40% of panel, footer shows `queued` when running. `+` button / `F2` / `@ / #` open the picker.
+- **chat** — message list, tool calls rendered as collapsed one-liners (click/`Space` expands), mentions clickable → open in the other panel. Prompt attached at bottom: multiline (`⇧⏎`), grows to 40% of panel, footer shows `queued` when running. `+` button / `F2` / `@ / #` open the picker.
 - **files** — NC list: name, size, date. `↑↓` move, `⏎` open in other panel (dir: enter), `Backspace` up, `Ins` mark, `@` mentions marked set into prompt, `⌃F` filter. Drop zone for upload. Shows `skills/` and `.aicommander/` with subtle labels.
 - **editor** — CodeMirror; md with live preview toggle (`⌃E` edit⇄view); `⌃S` save; unsaved marker in tab; external change → warning modal (v2).
 - **viewer** — chosen by extension via viewer registry: images/video native; `.stl/.obj/.gltf/.scad` → cad; `.kicad_sch/.kicad_pcb` → circuit; `.csv/.sqlite` → table; pdf → iframe. Viewer can emit `mention.add`.
@@ -332,11 +334,20 @@ Loaded at startup and on `viewer.install`. The brain can write one, then must ap
 
 Global:
 ```
-Tab        swap panel focus       ⌃O   open folder          ⌃B   collapse other panel
-⌃←/→       resize gutter          ⌃T   new tab              ⌃W   close tab
-⌃⇥         next tab               ⌃N   new session          ⌃,   options
-F1         help (keymap overlay)  F10  quit (warning if running)
+Tab        swap panel focus       ⌃1/⌃2  focus left / right panel
+⌃←/→       resize gutter          ⌃B     collapse other panel
+⌃⇥         next tab               ⌃W     close tab
+⌃N         new session (in the focused panel)
+⌃T         pick ▸ new session · existing session · files · file…
+⌃P         fuzzy file open        ⏎ here · ⌃⏎ other panel
+⌃⇧P        files this session has touched, same keys
+⌃O         open folder            ⌃,     options
+F1         help (keymap overlay)  F10    quit (warning if running)
 ```
+
+`⌃T` opens the **pick modal** — the info-tier filterable list from v2 §"the other three
+shapes". It is the same component as the `+` picker (M3) and the session/model/viewer
+choosers (M2), so it is built once: filter box, arrow keys, `⏎` choose, `Esc` close.
 Files focused:
 ```
 F2 menu   F3 view   F4 edit   F5 copy   F6 move   F7 mkdir   F8 delete   F9 upload
@@ -367,7 +378,7 @@ Each milestone ends with a demo you can run and a checklist. Don't start the nex
 ### M1 — Commander shell
 - Two panels, tabs, gutter, focus, F-key bar (context-relative), status line, top line.
 - files view (NC keys, mark, `@`), editor view (CodeMirror, md preview), image viewer.
-- `open_in_panel` tool + click on mentions.
+- auto-open on write + click on mentions.
 - workspace.json save/restore (tabs, gutter, focus, marks, prompt draft).
 - chokidar → fs.changed → files view refresh.
 - ✅ Brain edits a file → it opens in the other panel; you edit NOTES.md while the loop runs; close and reopen → identical layout.

@@ -9,6 +9,7 @@ import { ImageViewer } from "./ImageViewer.js";
 import { defaultRegistry } from "./viewers.js";
 import { addChips, removeChip, type Chip } from "./chips.js";
 import { linkifyMentions } from "./mentions.js";
+import { Pick, type PickItem } from "./Pick.js";
 import type { Attachment } from "@aicommander/protocol";
 
 /** The shell: top line, two tabbed panels with a draggable gutter, status line,
@@ -26,12 +27,12 @@ export function App(): JSX.Element {
   const conn = useRef<Connection>();
 
   /** Handlers that the socket callback needs but that change every render. */
-  const live = useRef<{ onOpenInPanel: (e: Extract<Event, { type: "open_in_panel" }>) => void }>();
+  const live = useRef<{ onShowFiles: (e: Extract<Event, { type: "show_files" }>) => void }>();
 
   useEffect(() => {
     const c = connect(
       (e) => {
-        if (e.type === "open_in_panel") live.current?.onOpenInPanel(e);
+        if (e.type === "show_files") live.current?.onShowFiles(e);
         dispatch(e);
       },
       () => dispatch({ type: "__conn", connected: true }),
@@ -135,25 +136,61 @@ export function App(): JSX.Element {
     return { outcome: "opened", side, view };
   }, [left, right]);
 
+  const openFileRef = useRef(openFile);
+  openFileRef.current = openFile;
+
   /**
    * The socket is opened once on mount, so its callback would capture the first
    * render's `openFile` forever. Routing through a ref that every render refreshes
    * keeps the handler current without re-subscribing the socket.
    */
   live.current = {
-    onOpenInPanel: (e) => {
-      // `target` names where the file should land, but openFile opens *away* from the
+    onShowFiles: (e) => {
+      // `target` names where the files should land, but openFile opens *away* from the
       // side it is given — so pass the opposite. "other" means away from focus.
       const source: PanelSide = e.target === "left" ? "right"
         : e.target === "right" ? "left"
         : layoutRef.current.focus;
-      const result = openFile(source, e.path, e.mode);
+      // Opened in order, so the last path ends up active — the brain's final argument
+      // is the one it most wants seen.
+      const results = e.paths.map((path) => {
+        const r = openFile(source, path);
+        return { path, outcome: r.outcome, view: r.view };
+      });
       // Tell the loop what actually happened, so its tool result is truthful (§5).
       if (e.requestId) {
-        conn.current?.send({ type: "panel.opened", requestId: e.requestId, ...result });
+        conn.current?.send({
+          type: "files.shown",
+          requestId: e.requestId,
+          results,
+          side: results[0] ? (source === "left" ? "right" : "left") : undefined,
+        });
       }
     },
   };
+
+  /** Which pick modal is open, if any (§11). */
+  const [pick, setPick] = useState<"menu" | "files" | "touched" | "sessions" | null>(null);
+  const [tree, setTree] = useState<string[]>([]);
+
+  /** ⌃P needs the file list; fetch it lazily and keep it for the session. */
+  const loadTree = useCallback(() => {
+    conn.current?.request({ type: "fs.tree", limit: 5000 }, "fs.tree")
+      .then((e) => setTree((e as { paths: string[] }).paths))
+      .catch(() => setTree([]));
+  }, []);
+
+  const newSession = useCallback(() => {
+    conn.current?.send({ type: "session.create" });
+  }, []);
+
+  /** Open a picked file: ⏎ here (focused panel), ⌃⏎ the other one (§11). */
+  const openPicked = useCallback((path: string, other: boolean) => {
+    // openFile opens away from the side it is given, so "here" passes the other side.
+    const focus = layoutRef.current.focus;
+    openFileRef.current(other ? focus : (focus === "left" ? "right" : "left"), path);
+    setPick(null);
+  }, []);
 
   // Global keys (§11): Tab swaps focus, ⌃←/→ resizes, ⌃B collapses, Esc cancels.
   useEffect(() => {
@@ -186,11 +223,30 @@ export function App(): JSX.Element {
         layout.toggleCollapse();
         return;
       }
-      // Tab host keys (§11): ⌃T new, ⌃W close, ⌃⇥ cycle.
+      // §11 pickers and sessions.
       if (e.ctrlKey && (e.key === "t" || e.key === "T")) {
         e.preventDefault();
-        // Until the picker exists, a new tab is a files view on the repo root.
-        focused.open({ view: "files", title: "files", path: "." });
+        setPick("menu");
+        return;
+      }
+      if (e.ctrlKey && (e.key === "p" || e.key === "P")) {
+        e.preventDefault();
+        if (e.shiftKey) {
+          setPick("touched");
+        } else {
+          loadTree();
+          setPick("files");
+        }
+        return;
+      }
+      if (e.ctrlKey && (e.key === "n" || e.key === "N")) {
+        e.preventDefault();
+        newSession();
+        return;
+      }
+      if (e.ctrlKey && (e.key === "1" || e.key === "2")) {
+        e.preventDefault();
+        layout.setFocus(e.key === "1" ? "left" : "right");
         return;
       }
       if (e.ctrlKey && e.key === "Tab") {
@@ -207,7 +263,7 @@ export function App(): JSX.Element {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state.status, cancel, layout, focused]);
+  }, [state.status, cancel, layout, focused, loadTree, newSession]);
 
   const colsClass = [
     "cols",
@@ -304,6 +360,77 @@ export function App(): JSX.Element {
       </div>
       <StatusLine state={state} layout={layout} />
       <FKeys keys={keysFor(focused.active?.view)} />
+      {pick === "menu" && (
+        <Pick
+          title="open"
+          hint="⏎ choose · Esc close"
+          items={[
+            { id: "new-session", label: "new session", detail: "⌃N", group: "session" },
+            ...(state.sessions.length > 1
+              ? [{ id: "sessions", label: "existing session…", detail: `${state.sessions.length}`, group: "session" }]
+              : []),
+            { id: "files", label: "files", detail: "browse the repo", group: "open" },
+            { id: "file", label: "file…", detail: "⌃P", group: "open" },
+            { id: "touched", label: "files this session touched", detail: "⌃⇧P", group: "open" },
+          ]}
+          onChoose={(item) => {
+            switch (item.id) {
+              case "new-session": newSession(); setPick(null); return;
+              case "sessions": setPick("sessions"); return;
+              case "files":
+                focused.open({ view: "files", title: "files", path: "." });
+                setPick(null);
+                return;
+              case "file": loadTree(); setPick("files"); return;
+              case "touched": setPick("touched"); return;
+              default: setPick(null);
+            }
+          }}
+          onClose={() => setPick(null)}
+        />
+      )}
+      {pick === "files" && (
+        <Pick
+          title="open file"
+          placeholder="fuzzy filter"
+          hint="⏎ here · ⌃⏎ other panel · Esc close"
+          items={tree.map((path) => ({ id: path, label: path }))}
+          onChoose={(item, alt) => openPicked(item.id, alt)}
+          onClose={() => setPick(null)}
+        />
+      )}
+      {pick === "touched" && (
+        <Pick
+          title={`files this session touched`}
+          placeholder="filter"
+          hint="⏎ here · ⌃⏎ other panel · Esc close"
+          items={state.touched.map((t) => ({
+            id: t.path,
+            label: t.path,
+            detail: t.kind === "written" ? "written" : t.kind,
+            group: t.kind === "written" ? "changed" : "seen",
+          }))}
+          onChoose={(item, alt) => openPicked(item.id, alt)}
+          onClose={() => setPick(null)}
+        />
+      )}
+      {pick === "sessions" && (
+        <Pick
+          title="session"
+          placeholder="filter"
+          hint="⏎ open · Esc close"
+          items={state.sessions.map((m) => ({
+            id: m.id,
+            label: m.name,
+            detail: m.id === state.sessionId ? "current" : m.model,
+          }))}
+          onChoose={(item) => {
+            conn.current?.send({ type: "session.open", sessionId: item.id });
+            setPick(null);
+          }}
+          onClose={() => setPick(null)}
+        />
+      )}
       {toasts.length > 0 && (
         <div className="toasts">
           {toasts.map((t) => (

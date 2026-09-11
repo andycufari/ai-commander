@@ -2,7 +2,7 @@ import { z } from "zod";
 import { Config } from "./config.js";
 import { RuleLevel } from "./rules.js";
 import { Group, SessionMeta, SessionStatus } from "./session.js";
-import { GitAction, PanelMode, ToolResult } from "./tools.js";
+import { GitAction, ToolResult } from "./tools.js";
 import { PanelTarget, Workspace } from "./workspace.js";
 
 /** §3 server → client. `{ id, type, ...payload }`; `id` is unique per event. */
@@ -71,13 +71,11 @@ export const JobStart = event("job.start", { jobId: z.string(), sessionId: z.str
 export const JobOutput = event("job.output", { jobId: z.string(), delta: z.string() });
 export const JobEnd = event("job.end", { jobId: z.string(), code: z.number().int().nullable(), killed: z.boolean().default(false) });
 
-export const OpenInPanel = event("open_in_panel", {
-  path: z.string(),
-  viewer: z.string().optional(),
-  mode: PanelMode.default("view"),
+/** §5 show_files: the app routes each path through the viewer registry itself. */
+export const ShowFiles = event("show_files", {
+  paths: z.array(z.string()).min(1),
   target: PanelTarget.default("other"),
-  /** Set when the brain called the tool: the UI answers with panel.opened so the
-   *  tool result can say what actually happened. */
+  /** The UI answers with files.shown so the tool result says what actually happened. */
   requestId: z.string().optional(),
 });
 /** Viewer or files view pushing text into the prompt. */
@@ -120,6 +118,12 @@ export const FsContent = event("fs.content", {
 });
 /** Reply to fs.write: confirms the write and returns the hash of what is now on disk,
  *  so an editor can re-base its buffer without a second round trip. */
+/** Reply to fs.tree: repo-relative file paths, already sorted. */
+export const FsTreeListed = event("fs.tree", {
+  intentId: z.string(),
+  paths: z.array(z.string()),
+  truncated: z.boolean().default(false),
+});
 export const FsWrote = event("fs.wrote", {
   intentId: z.string(),
   path: z.string(),
@@ -132,10 +136,19 @@ export const GitResult = event("git.result", {
 });
 /** Full session list + replayed log, sent on open and on reconnect. */
 export const SessionList = event("session.list", { sessions: z.array(SessionMeta) });
+export const TouchedFile = z.object({
+  path: z.string(),
+  kind: z.enum(["written", "read", "mentioned"]),
+  ts: z.number().int(),
+});
+export type TouchedFile = z.infer<typeof TouchedFile>;
+
 export const SessionEvents = event("session.events", {
   sessionId: z.string(),
   meta: SessionMeta,
   groups: z.array(Group),
+  /** Files this session has touched, for the ⌃⇧P modal (§11). Writes first. */
+  touched: z.array(TouchedFile).default([]),
 });
 /** Sent on connect: the merged config plus what the shell's top line needs (§10). */
 export const ConfigEvent = event("config", {
@@ -149,9 +162,9 @@ export const Event = z.discriminatedUnion("type", [
   ToolStart, ToolOutput, ToolEnd,
   PermissionRequest, AskRequest,
   JobStart, JobOutput, JobEnd,
-  OpenInPanel, MentionAdd, FsChanged, GitChanged,
+  ShowFiles, MentionAdd, FsChanged, GitChanged,
   Toast, CompactDone, WorkspaceEvent, ErrorEvent,
-  FsListed, FsContent, FsWrote, GitResult, SessionList, SessionEvents, ConfigEvent,
+  FsListed, FsTreeListed, FsContent, FsWrote, GitResult, SessionList, SessionEvents, ConfigEvent,
 ]);
 export type Event = z.infer<typeof Event>;
 export type EventType = Event["type"];
