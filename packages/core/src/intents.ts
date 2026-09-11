@@ -118,7 +118,7 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
       }
       // Deliberately not awaited: the turn streams events for its whole life, and the
       // socket must stay responsive so Esc can cancel it.
-      void ctx.loop.send(intent.sessionId, intent.text).catch((err: unknown) => {
+      void ctx.loop.send(intent.sessionId, intent.text, intent.attachments).catch((err: unknown) => {
         ctx.broadcast(ev("error", { message: err instanceof Error ? err.message : String(err) }));
       });
       return;

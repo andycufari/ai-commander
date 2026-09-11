@@ -1,0 +1,13 @@
+{
+  "id": "c17b2b8a",
+  "name": "session c17b2b8a",
+  "model": "local-brain",
+  "created": 1789148376192,
+  "snapshots": [
+    {
+      "groupId": "gmtx8qydf",
+      "gitRef": "refs/aicommander/c17b2b8a-gmtx8qydf"
+    }
+  ],
+  "specialTools": []
+}

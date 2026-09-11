@@ -2,13 +2,14 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { stat } from "node:fs/promises";
 import {
-  ToolArgs, type Config, type Event, type LogEntry, type Rules, type ToolResult,
+  ToolArgs, type Attachment, type Config, type Event, type Rules, type ToolResult,
 } from "@aicommander/protocol";
 import { check } from "./permissions.js";
 import { ErrorGuard, RepeatGuard } from "./guards.js";
 import { JobRegistry } from "./jobs.js";
 import { takeSnapshot } from "./snapshots.js";
 import { planCompact } from "./compact.js";
+import { assembleContext } from "./context.js";
 import { resolveInRoot } from "./paths.js";
 import { BrainClient, BrainError, type BrainMessage, type ToolSpec } from "./brain.js";
 import { projectDir } from "./config.js";
@@ -80,6 +81,8 @@ export class Loop {
   private readonly slowSnapshotWarned = new Set<string>();
   /** Sessions already told to compact; the 75% nudge is said once. */
   private readonly compactSuggested = new Set<string>();
+  /** Whether a model takes image content, learned from the endpoint or from a refusal. */
+  private readonly vision = new Map<string, boolean>();
   /** show_files calls waiting for the UI to report what it did with each path. */
   private readonly showWaits = new Map<string, (r: ShowResult[]) => void>();
 
@@ -371,7 +374,7 @@ export class Loop {
     return true;
   }
 
-  async send(sessionId: string, text: string): Promise<void> {
+  async send(sessionId: string, text: string, attachments: Attachment[] = []): Promise<void> {
     if (this.running.has(sessionId)) {
       this.queue(sessionId, text);
       return;
@@ -396,7 +399,7 @@ export class Loop {
     const specs: ToolSpec[] = toolSpecs(CORE_ENABLED);
 
     await sessions.append(sessionId, {
-      t: "user", id: groupId, ts: Date.now(), text, attachments: [],
+      t: "user", id: groupId, ts: Date.now(), text, attachments,
     });
     emit(ev("turn.start", { sessionId, groupId, role: "user" }));
     this.state(sessionId, "running", run);
@@ -430,10 +433,15 @@ export class Loop {
       }
     }
 
-    // M0 context: system prompt + replayed history. The full §7 assembler lands in M3.
+    // §7: the full context, rebuilt from the log every turn.
+    const assembled = await assembleContext({
+      root, config, sessions, sessionId,
+      pending: attachments,
+      vision: this.vision.get(config.brain.model),
+    });
+    this.deps.emit(ev("context", { sessionId, layers: assembled.layers }));
     const messages: BrainMessage[] = [
-      { role: "system", content: systemPrompt(root) },
-      ...(await replay(sessions, sessionId, groupId)),
+      ...assembled.messages,
       { role: "user", content: text },
     ];
 
@@ -454,6 +462,16 @@ export class Loop {
         await sessions.append(sessionId, {
           t: "brain", id: groupId, ts: Date.now(), text: result.text, toolCalls: result.toolCalls,
         });
+
+        // §12 M3: the inspector shows what the endpoint charged, never a local guess.
+        // A tokenizer we do not have cannot be second-guessed from here.
+        if (result.usage) {
+          emit(ev("context", {
+            sessionId,
+            layers: assembled.layers,
+            promptTokens: result.usage.prompt,
+          }));
+        }
 
         if (result.toolCalls.length === 0) break;
 
@@ -583,6 +601,15 @@ export class Loop {
     } catch (err) {
       if (controller.signal.aborted || (err as Error).name === "AbortError") {
         cancelled = true;
+      } else if (err instanceof BrainError && looksLikeImageRefusal(err.message)) {
+        // The endpoint does not take image content. Remember it, tell the user, and
+        // let the next turn go through with the images described instead — a picture
+        // the model cannot see is not a reason to lose the turn.
+        this.vision.set(config.brain.model, false);
+        emit(ev("toast", {
+          level: "warning",
+          text: `${config.brain.model} can't see images — they stay attached, but it only gets the filename`,
+        }));
       } else {
         const message = err instanceof BrainError ? err.message : `loop failed: ${(err as Error).message}`;
         emit(ev("toast", { level: "warning", text: message }));
@@ -636,32 +663,16 @@ const toolMessage = (callId: string, name: string, content: string): BrainMessag
 /** Rough token estimate until the real accounting lands in M3. */
 const estimate = (text: string): number => Math.ceil(text.length / 4);
 
-/** Replay prior groups into API messages. The §7 assembler replaces this in M3. */
-async function replay(
-  sessions: SessionStore,
-  sessionId: string,
-  currentGroup: string,
-): Promise<BrainMessage[]> {
-  const entries = await sessions.read(sessionId);
-  const out: BrainMessage[] = [];
-  for (const e of entries as LogEntry[]) {
-    if ("id" in e && e.id === currentGroup) continue;
-    if (e.t === "user") out.push({ role: "user", content: e.text });
-    else if (e.t === "brain" && e.text) out.push({ role: "assistant", content: e.text });
-  }
-  return out;
-}
 
-/** M0 placeholder for `.aicommander/system.md` — the real manual ships in M3. */
-function systemPrompt(root: string): string {
-  return [
-    "You are the brain of AI Commander, a local-first harness for iterating on a repo.",
-    `The repo root is ${root}. Every path you use is relative to it; you cannot read or write outside it.`,
-    "",
-    "Use the tools to look before you answer: glob and grep to find things, read_file to read them.",
-    "Prefer edit_file over write_file for changes to an existing file.",
-    "Keep replies short. The user sees your tool calls, so do not narrate them.",
-  ].join("\n");
+
+/**
+ * Does this error read as "I do not take images"? Endpoints disagree on the wording,
+ * so this matches the shapes seen in practice rather than a status code — a false
+ * positive costs one retry without images, which is the behaviour we want anyway.
+ */
+function looksLikeImageRefusal(message: string): boolean {
+  return /image|vision|multimodal|image_url/i.test(message)
+    && /not support|unsupported|invalid|cannot|unknown/i.test(message);
 }
 
 export { CORE_ENABLED };

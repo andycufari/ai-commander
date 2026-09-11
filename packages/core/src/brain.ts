@@ -70,6 +70,10 @@ export class BrainClient {
       messages,
       stream: true,
       temperature: this.config.temperature,
+      // Ask for the token counts in the stream. The context inspector shows what the
+      // endpoint actually charged rather than a local estimate, and without this most
+      // OpenAI-compatible servers omit usage entirely when streaming.
+      stream_options: { include_usage: true },
     };
     if (sendTools) {
       body.tools = tools.map((t) => ({

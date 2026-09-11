@@ -11,6 +11,18 @@ const event = <T extends string, S extends z.ZodRawShape>(type: T, shape: S) =>
   z.object({ id: z.string(), type: z.literal(type), ...shape });
 
 /** §6 guard 6: what the snapshot before this turn cost, for the status line. */
+/** §12 M3: what each context layer cost, for the inspector. */
+export const ContextLayers = event("context", {
+  sessionId: z.string(),
+  layers: z.array(z.object({
+    name: z.string(),
+    chars: z.number().int().nonnegative(),
+    detail: z.string().optional(),
+  })),
+  /** Filled in from the endpoint's usage field once the turn reports it. */
+  promptTokens: z.number().int().nonnegative().optional(),
+});
+
 export const SnapshotTaken = event("snapshot", {
   sessionId: z.string(),
   groupId: z.string(),
@@ -190,7 +202,7 @@ export const ConfigEvent = event("config", {
 });
 
 export const Event = z.discriminatedUnion("type", [
-  SessionStateEvent, SnapshotTaken, TurnStart, Token,
+  SessionStateEvent, SnapshotTaken, ContextLayers, TurnStart, Token,
   ToolStart, ToolOutput, ToolEnd,
   PermissionRequest, AskRequest,
   JobStart, JobOutput, JobEnd,
