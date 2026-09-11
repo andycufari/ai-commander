@@ -1,6 +1,6 @@
 {
   "layout": "commander",
-  "gutter": 0.5,
+  "gutter": 0.45,
   "focus": "left",
   "collapsed": null,
   "panels": {
@@ -13,8 +13,19 @@
       "active": 0
     },
     "right": {
-      "tabs": [],
-      "active": 0
+      "tabs": [
+        {
+          "view": "editor",
+          "path": "docs/PROGRESS.md",
+          "mode": "view",
+          "viewer": "markdown"
+        },
+        {
+          "view": "files",
+          "path": "."
+        }
+      ],
+      "active": 1
     }
   },
   "marked": [],

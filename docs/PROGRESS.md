@@ -1,6 +1,6 @@
 # Progress
 
-Current milestone: **M1 — Commander shell** (M0 complete)
+Current milestone: **M2 — Loop hardening** (M0, M1 complete)
 
 Update the checklist as items land. One commit per item (`M0: protocol package` style).
 
@@ -32,16 +32,51 @@ Still open from M0: `ask_user` (needs the modal round trip; lands with M2 permis
 
 ## M1 — Commander shell
 
-- [ ] Two panels, tabs, gutter, focus, F-key bar (context-relative), status line, top line
-- [ ] files view (NC keys, mark, `@`)
-- [ ] editor view (CodeMirror, md preview)
-- [ ] image viewer
-- [ ] `open_in_panel` tool + click on mentions
-- [ ] workspace.json save/restore (tabs, gutter, focus, marks, prompt draft)
-- [ ] chokidar → `fs.changed` → files view refresh
+- [x] 1. Two panels, draggable gutter, focus, maximize (80%)
+- [x] 2. Tabbed view host + context-relative key bar
+- [x] 3. files view (NC keys, mark, `@`, tree expansion) + viewer registry + prompt chips
+- [x] 4. editor view (CodeMirror 6, md preview, ⌘S with conflict) + image viewer
+- [x] 5. `show_files` tool + clickable mentions
+- [x] 6. workspace.json save/restore + chokidar → `fs.changed`
+- [x] 7. **Demo**
 
-**Demo:** brain edits a file → it opens in the other panel; you edit NOTES.md while the loop
-runs; close and reopen → identical layout.
+**Demo — PASSED** 2026-09-11, live against `192.168.1.44:8001` (`local-brain`, 27B
+Q4_K_M, 98k ctx), driven through the real browser UI:
+
+1. "show me docs/PROGRESS.md, then say which milestone is current" → `read_file` +
+   `show_files`, the file opened in the right panel, the chat stayed intact on the left,
+   and the model answered correctly from what it read
+2. a file created on disk while a 6s shell command was running appeared in the open
+   files view mid-loop, and the turn finished normally
+3. gutter (0.45), tabs and an unsent prompt draft came back byte-identical after reload
+
+### Landed beyond the original M1 list
+
+First-use feedback moved several things forward:
+
+- **No F-keys.** Many keyboards lack them and the browser claims several, so the bar
+  shows ⌘-chords and is clickable. Chords a tab can never own (⌘W/⌘N/⌘T) hang off a
+  ⌘K leader; Tauri adds the direct forms later without relearning.
+- **Pick modal** (`Pick.tsx`) — the v2 info-tier filterable list, built as the reusable
+  one M2's choosers and M3's `+` picker extend. Drives ⌘P, ⌘⇧P, ⌘K, ⌘O, ⌘, and ⌘/.
+- **Touched-files list** derived from `session.jsonl`, per-session and reload-proof.
+- **Slash commands** — `/clear`, `/new`, `/model`, `/files`, `/touched`, `/help` work;
+  `/compact` and `/rewind` name the milestone they arrive in rather than failing silently.
+- **`@` completes** repo files inline and produces a chip, not text.
+- **`show_files` replaced `open_in_panel`** — the brain names paths, the app decides how
+  to display each. Auto-open-on-write was built and then removed: inferring intent from
+  a write only covers "here is what I changed".
+- **`fs.tree`, `folders.list`, `fs.wrote`, `files.shown`** added to §3.
+
+### Known gaps carried forward
+
+- `⌘O` lists folders but cannot switch repo — one repo per window needs a backend per
+  window, which is a Tauri concern (M5).
+- The settings modal shows brain and mode read-only; editing is the M2 options modal.
+- `~/.aicommander/config.json` supports `apiKey` and `apiKeyEnv`, but nothing writes it
+  from the UI yet.
+- `ask_user` still unimplemented (M0 item 5) — needs the modal round trip, so it lands
+  with the M2 permission modals.
 
 ---
 
@@ -101,6 +136,9 @@ Context inspector matches what's sent.
 - Palette lives in `apps/web/src/tokens.css`, copied from `harness-layouts-v0.html` `:root`.
 - Brain box: `192.168.1.44:8001` (llama.cpp, model id `local-brain`, 27B Q4_K_M, 98k ctx).
   `.40` from BUILDME §9 is not currently up.
+- `scripts/ui-check.ts` is the UI regression net — 91 assertions driven through headless
+  Chrome over CDP. Run it against a live backend after any UI change:
+  `pnpm ui-check`. It resets the workspace between groups and works against any repo.
 - `scripts/chat.ts` drives a session from the terminal until the web app lands
   (`pnpm chat -- --new`). Esc cancels; `/cancel` and `/quit` also work.
 - Item 3 (web app shell) is the only M0 item left.
