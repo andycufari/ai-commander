@@ -10,7 +10,8 @@ export interface PanelTabs {
   tabs: Tab[];
   activeId: string | null;
   active: Tab | undefined;
-  open: (tab: Omit<Tab, "id" | "dirty"> & { id?: string; dirty?: boolean }) => string;
+  /** `dirty` and `conflict` carry defaults, so a caller supplies neither. */
+  open: (tab: Omit<Tab, "id" | "dirty" | "conflict"> & { id?: string; dirty?: boolean; conflict?: boolean }) => string;
   close: (id: string) => void;
   select: (id: string) => void;
   cycle: (dir?: 1 | -1) => void;
@@ -39,7 +40,7 @@ export function usePanelTabs(initial: Tab[] = [], initialActive: string | null =
       return existing.id;
     }
     const id = tab.id ?? tabId();
-    const next: Tab = { dirty: false, ...tab, id };
+    const next: Tab = { dirty: false, conflict: false, ...tab, id };
     tabsRef.current = [...tabsRef.current, next];
     setTabs(tabsRef.current);
     setActiveId(id);

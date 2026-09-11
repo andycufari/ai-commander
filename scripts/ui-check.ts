@@ -221,6 +221,72 @@ export async function assertFBar(page: Page, expectLabel?: string): Promise<void
   }
 }
 
+/**
+ * A view must survive the panel changing size or vanishing. Editors and canvases that
+ * measure themselves on mount are the classic casualty: the gutter moves and they keep
+ * their old width, or a collapse leaves them zero-sized and they never recover.
+ */
+export async function assertSurvivesResize(page: Page, viewSelector: string, label: string): Promise<void> {
+  const measure = async (): Promise<{ w: number; h: number; inPanel: boolean }> =>
+    page.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(viewSelector)});
+      if (!el) return { w: -1, h: -1, inPanel: false };
+      const r = el.getBoundingClientRect();
+      const blk = el.closest('.blk')?.getBoundingClientRect();
+      return {
+        w: Math.round(r.width), h: Math.round(r.height),
+        inPanel: !!blk && r.left >= blk.left - 1 && r.right <= blk.right + 1,
+      };
+    })()`);
+
+  const before = await measure();
+  check(`${label} is laid out`, before.w > 0 && before.h > 0, before);
+
+  // Move the gutter two steps and make sure the view followed its panel.
+  for (let i = 0; i < 2; i += 1) {
+    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',ctrlKey:true,bubbles:true}))`);
+    await sleep(150);
+  }
+  const narrowed = await measure();
+  check(`${label} follows the gutter`, narrowed.w > 0 && narrowed.w !== before.w, { before, narrowed });
+  check(`${label} stays inside its panel`, narrowed.inPanel, narrowed);
+  await assertNoOverflow(page);
+
+  // Collapse and restore. ⌃B hides the *other* panel, so this view is either squeezed
+  // to nothing (it was the one collapsed) or widened — either is fine. What must hold
+  // is that the element still exists, nothing overflows, and it comes back afterwards.
+  await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'b',ctrlKey:true,bubbles:true}))`);
+  await sleep(250);
+  const collapsed = await page.eval<boolean>(
+    `!!document.querySelector(${JSON.stringify(viewSelector)})`);
+  check(`${label} still exists through a panel collapse`, collapsed, { collapsed });
+  await assertNoOverflow(page);
+
+  await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'b',ctrlKey:true,bubbles:true}))`);
+  await sleep(250);
+  for (let i = 0; i < 2; i += 1) {
+    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',ctrlKey:true,bubbles:true}))`);
+    await sleep(150);
+  }
+  const restored = await measure();
+  check(`${label} returns to its size when restored`, Math.abs(restored.w - before.w) <= 2, { before, restored });
+  await assertTitlesNotClipped(page);
+}
+
+/** Walk the files view to a path and open it, leaving the view in the other panel. */
+async function openViaFiles(page: Page, steps: string[]): Promise<void> {
+  await page.reload();
+  await sleep(2500);
+  await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}))`);
+  await sleep(200);
+  await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',ctrlKey:true,bubbles:true}))`);
+  await sleep(900);
+  for (const key of steps) {
+    await page.eval(`document.querySelector('.files')?.dispatchEvent(new KeyboardEvent('keydown',{key:${JSON.stringify(key)},bubbles:true}))`);
+    await sleep(key === "Enter" ? 900 : 250);
+  }
+}
+
 /* ------------------------------------------------------------------ */
 
 async function main(): Promise<void> {
@@ -367,6 +433,40 @@ async function main(): Promise<void> {
       opened2);
     await assertNoOverflow(page);
     await assertTitlesNotClipped(page);
+
+    group("editor");
+    // docs/ then NOTES.md — a markdown file, which opens as a preview.
+    await openViaFiles(page, ["ArrowDown", "Enter", "ArrowDown", "Enter"]);
+    const preview = await page.eval<{ md: boolean; title: string }>(`(() => ({
+      md: !!document.querySelector('.body.md'),
+      title: document.querySelector('.cols > .blk .t')?.textContent ?? '',
+    }))()`);
+    check("markdown opens as a preview in the other panel", preview.md, preview);
+    check("the editor tab is titled by the file", preview.title.includes("NOTES.md"), preview.title);
+
+    // ⌃E toggles preview → editor in the same tab.
+    await page.eval(`(() => { const el = document.querySelector('.body.md'); el.focus();
+      el.dispatchEvent(new KeyboardEvent('keydown',{key:'e',ctrlKey:true,bubbles:true})); })()`);
+    await sleep(700);
+    const edited = await page.eval<{ cm: boolean; tabs: number }>(`(() => ({
+      cm: !!document.querySelector('.body.cm .cm-editor'),
+      tabs: document.querySelectorAll('.cols > .blk:first-child .tab').length,
+    }))()`);
+    check("⌃E switches to CodeMirror in place", edited.cm, edited);
+    await assertSurvivesResize(page, ".body.cm .cm-scroller", "editor");
+
+    group("image viewer");
+    // hw/ then board.png
+    await openViaFiles(page, ["ArrowDown", "ArrowDown", "Enter", "Enter"]);
+    const img = await page.eval<{ has: boolean; caption: string }>(`(() => ({
+      has: !!document.querySelector('.body.image img'),
+      caption: document.querySelector('.image-tb')?.textContent ?? '',
+    }))()`);
+    check("image opens in the viewer", img.has, img);
+    check("caption carries filename and dimensions",
+      /board\.png/.test(img.caption) && /\d+×\d+/.test(img.caption), img.caption);
+    check("image starts fitted", /\(fit\)/.test(img.caption), img.caption);
+    await assertSurvivesResize(page, ".body.image", "image viewer");
 
     group("focus");
     await page.reload();

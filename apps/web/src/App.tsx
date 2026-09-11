@@ -4,6 +4,8 @@ import { connect, echoUser, initialState, reduce, type ChatRow, type Connection,
 import { GUTTER_STEP, useGutterDrag, usePanelLayout } from "./panels.js";
 import { keysFor, usePanelTabs, type FKeySet, type PanelTabs } from "./tabs.js";
 import { FilesView } from "./FilesView.js";
+import { Editor } from "./Editor.js";
+import { ImageViewer } from "./ImageViewer.js";
 import { defaultRegistry } from "./viewers.js";
 import { addChips, removeChip, type Chip } from "./chips.js";
 import type { Attachment } from "@aicommander/protocol";
@@ -65,15 +67,32 @@ export function App(): JSX.Element {
   const drag = useGutterDrag(colsRef, layout.setGutter);
 
   // Each panel is a tabbed view host (§10). The chat tab is always there to start.
-  const left = usePanelTabs([{ id: "chat", view: "chat", title: "chat", dirty: false }], "chat");
+  const left = usePanelTabs([{ id: "chat", view: "chat", title: "chat", dirty: false, conflict: false }], "chat");
   const right = usePanelTabs([]);
   const focused = layout.focus === "left" ? left : right;
+
+  // Toasts: bottom-right, 4s, stack 3 (§10).
+  const [toasts, setToasts] = useState<{ id: number; level: "info" | "warning"; text: string }[]>([]);
+  const toast = useCallback((level: "info" | "warning", text: string) => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev.slice(-2), { id, level, text }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+  }, []);
 
   // Prompt attachments, as chips (§7). The M3 + picker adds to the same list.
   const [chips, setChips] = useState<Chip[]>([]);
   const mention = useCallback((attachments: Attachment[]) => {
     setChips((prev) => addChips(prev, attachments));
   }, []);
+
+  /** Esc in a view returns to the chat (§11: "Esc → chat"). */
+  const focusChat = useCallback(() => {
+    const side: PanelSide = left.tabs.some((t) => t.view === "chat") ? "left" : "right";
+    const host = side === "left" ? left : right;
+    const chatTab = host.tabs.find((t) => t.view === "chat");
+    if (chatTab) host.select(chatTab.id);
+    layout.setFocus(side);
+  }, [left, right, layout]);
 
   /** ⏎ on a file: the registry decides which view opens it, in the *other* panel (§5). */
   const openFile = useCallback((fromSide: PanelSide, path: string) => {
@@ -84,6 +103,7 @@ export function App(): JSX.Element {
       title: path.split("/").pop() ?? path,
       path,
       viewer: entry.name,
+      mode: entry.mode,
     });
   }, [left, right]);
 
@@ -162,6 +182,28 @@ export function App(): JSX.Element {
             />
           </>
         );
+      case "editor":
+        return (
+          <Editor
+            conn={conn.current}
+            path={tab.path ?? ""}
+            focused={layout.focus === side}
+            mode={tab.mode ?? "edit"}
+            onModeChange={(m) => (side === "left" ? left : right).update(tab.id, { mode: m })}
+            onDirty={(d) => (side === "left" ? left : right).setDirty(tab.id, d)}
+            onConflict={(c) => (side === "left" ? left : right).update(tab.id, { conflict: c })}
+            onToast={toast}
+            onEscape={focusChat}
+          />
+        );
+      case "viewer":
+        return (
+          <ImageViewer
+            path={tab.path ?? ""}
+            focused={layout.focus === side}
+            onEscape={focusChat}
+          />
+        );
       case "files":
         return (
           <FilesView
@@ -215,6 +257,13 @@ export function App(): JSX.Element {
       </div>
       <StatusLine state={state} layout={layout} />
       <FKeys keys={keysFor(focused.active?.view)} />
+      {toasts.length > 0 && (
+        <div className="toasts">
+          {toasts.map((t) => (
+            <div key={t.id} className={`toast ${t.level}`}>{t.text}</div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -250,7 +299,7 @@ function Panel({
           {tabs.tabs.map((t) => (
             <span
               key={t.id}
-              className={t.id === tabs.activeId ? "tab on" : "tab"}
+              className={`tab${t.id === tabs.activeId ? " on" : ""}${t.conflict ? " conflict" : ""}`}
               onMouseDown={(e) => { e.stopPropagation(); onFocus(side); tabs.select(t.id); }}
             >
               {t.title}{t.dirty ? " ●" : ""}

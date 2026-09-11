@@ -22,6 +22,10 @@ export const Tab = z.object({
   viewer: z.string().optional(),
   jobId: z.string().optional(),
   dirty: z.boolean().default(false),
+  /** editor: "view" renders markdown, "edit" shows the buffer (⌃E toggles). */
+  mode: z.enum(["view", "edit"]).optional(),
+  /** Set when a save was refused because the file changed on disk (§10). */
+  conflict: z.boolean().default(false),
 });
 export type Tab = z.infer<typeof Tab>;
 

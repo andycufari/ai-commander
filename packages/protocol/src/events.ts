@@ -115,6 +115,13 @@ export const FsContent = event("fs.content", {
   content: z.string(),
   hash: z.string(),
 });
+/** Reply to fs.write: confirms the write and returns the hash of what is now on disk,
+ *  so an editor can re-base its buffer without a second round trip. */
+export const FsWrote = event("fs.wrote", {
+  intentId: z.string(),
+  path: z.string(),
+  hash: z.string(),
+});
 export const GitResult = event("git.result", {
   intentId: z.string(),
   action: GitAction,
@@ -141,7 +148,7 @@ export const Event = z.discriminatedUnion("type", [
   JobStart, JobOutput, JobEnd,
   OpenInPanel, MentionAdd, FsChanged, GitChanged,
   Toast, CompactDone, WorkspaceEvent, ErrorEvent,
-  FsListed, FsContent, GitResult, SessionList, SessionEvents, ConfigEvent,
+  FsListed, FsContent, FsWrote, GitResult, SessionList, SessionEvents, ConfigEvent,
 ]);
 export type Event = z.infer<typeof Event>;
 export type EventType = Event["type"];

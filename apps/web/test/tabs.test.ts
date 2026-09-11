@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { keysFor, usePanelTabs } from "../src/tabs.js";
 
-const chat = { id: "chat", view: "chat" as const, title: "chat", dirty: false };
+const chat = { id: "chat", view: "chat" as const, title: "chat", dirty: false, conflict: false };
 
 describe("usePanelTabs", () => {
   it("opens a tab and focuses it", () => {

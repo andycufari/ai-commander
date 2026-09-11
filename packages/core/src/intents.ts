@@ -154,6 +154,11 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
       }
       await mkdir(join(abs, ".."), { recursive: true });
       await writeFile(abs, intent.content);
+      ctx.send(ev("fs.wrote", {
+        intentId: intent.id,
+        path: toRepoPath(ctx.root, abs),
+        hash: hash(intent.content),
+      }));
       ctx.broadcast(ev("fs.changed", { paths: [toRepoPath(ctx.root, abs)] }));
       return;
     }

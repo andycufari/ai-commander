@@ -122,6 +122,21 @@ html, body, #root {
 .body { overflow-y: auto; flex: 1; min-height: 0; }
 .body.empty { display: grid; place-items: center; color: var(--dim); }
 
+/* toasts — bottom-right, stack 3 (§10) */
+.toasts {
+  position: fixed; right: 12px; bottom: 46px;
+  display: flex; flex-direction: column; gap: 4px; z-index: 20;
+}
+.toast {
+  border: 1px solid var(--line); background: var(--panel);
+  padding: 4px 10px; color: var(--ink); box-shadow: 4px 4px 0 rgba(0,0,0,.4);
+  max-width: 46ch;
+}
+.toast.warning { border-color: var(--red); color: var(--red); }
+
+/* a tab whose save was refused because the file moved underneath */
+.tab.conflict { color: var(--red); }
+
 /* files view — NC columns: name, size, date (§10) */
 .body.files { outline: none; }
 .files .row {
@@ -148,11 +163,67 @@ html, body, #root {
 .files .row.marked .nm { color: var(--amber); }
 .files .err-row { color: var(--red); padding: 2px; }
 
-/* the block's bottom-right caption, cut into the border like the title */
+/* editor */
+.body.cm { padding: 0; }
+.body.cm .cm-editor { height: 100%; }
+.body.cm .cm-scroller { overflow: auto; }
+
+/* markdown preview (⌃E) */
+.body.md { padding: 0 4px; outline: none; }
+.body.md h1, .body.md h2, .body.md h3, .body.md h4 { color: var(--hi); font-weight: 600; margin: 12px 0 6px; }
+.body.md h1 { font-size: 1.5em; }
+.body.md h2 { font-size: 1.25em; border-top: 1px solid var(--line); padding-top: 10px; }
+.body.md h3 { font-size: 1.1em; }
+.body.md p { margin: 6px 0; max-width: 78ch; }
+.body.md ul, .body.md ol { margin: 6px 0; padding-left: 20px; max-width: 78ch; }
+.body.md li { margin: 2px 0; }
+.body.md code { color: var(--amber); }
+.body.md pre {
+  background: var(--panel); border: 1px solid var(--line);
+  padding: 6px 8px; overflow-x: auto; margin: 8px 0;
+}
+.body.md pre code { color: var(--ink); }
+.body.md blockquote {
+  border-left: 2px solid var(--line); margin: 6px 0; padding-left: 10px; color: var(--dim);
+}
+.body.md a { color: var(--hi); }
+.body.md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+.body.md img { max-width: 100%; }
+
+/* image viewer */
+.body.image {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  outline: none;
+  cursor: grab;
+  touch-action: none;
+}
+.body.image:active { cursor: grabbing; }
+.body.image img {
+  max-width: none;
+  image-rendering: auto;
+  user-select: none;
+  /* checkerboard so transparent images read as transparent, not as the panel */
+  background-image:
+    linear-gradient(45deg, var(--panel) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--panel) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--panel) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--panel) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+/* the block's bottom-right caption, cut into the border like the title.
+   max-width keeps a long caption inside a narrowed panel instead of running past
+   the viewport when the gutter moves or the other panel collapses. */
 .blk > .tb {
   position: absolute; bottom: -9px; right: 8px;
   background: var(--bg); padding: 0 5px; color: var(--dim); font-size: 11px;
+  max-width: calc(100% - 16px);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.blk.hidden > .tb { display: none; }
 .body.wrap { white-space: normal; }
 
 /* chat rows */

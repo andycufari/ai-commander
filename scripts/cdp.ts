@@ -26,6 +26,12 @@ export interface Page {
   eval<T = unknown>(expression: string): Promise<T>;
   screenshot(path: string): Promise<void>;
   press(key: string): Promise<void>;
+  /**
+   * A real key event through the browser's input pipeline. Synthetic KeyboardEvents
+   * are untrusted, and CodeMirror (like many editors) ignores those — so anything
+   * driving the editor must use this.
+   */
+  keyPress(key: string, modifiers?: { ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean }): Promise<void>;
   /** Type into a React-controlled input: sets the value through the native setter
    *  so React's onChange actually fires. */
   fill(selector: string, text: string): Promise<void>;
@@ -118,6 +124,34 @@ export async function launch(opts: { width?: number; height?: number; port?: num
     screenshot: async (path) => {
       const s = (await cmd("Page.captureScreenshot", { format: "png" })) as { data: string };
       writeFileSync(path, Buffer.from(s.data, "base64"));
+    },
+    keyPress: async (key, mods = {}) => {
+      // CDP modifier bitmask: alt 1, ctrl 2, meta 4, shift 8.
+      const modifiers =
+        (mods.alt ? 1 : 0) | (mods.ctrl ? 2 : 0) | (mods.meta ? 4 : 0) | (mods.shift ? 8 : 0);
+      const special: Record<string, { keyCode: number; code: string }> = {
+        Enter: { keyCode: 13, code: "Enter" },
+        Escape: { keyCode: 27, code: "Escape" },
+        Backspace: { keyCode: 8, code: "Backspace" },
+        Tab: { keyCode: 9, code: "Tab" },
+        ArrowUp: { keyCode: 38, code: "ArrowUp" },
+        ArrowDown: { keyCode: 40, code: "ArrowDown" },
+        ArrowLeft: { keyCode: 37, code: "ArrowLeft" },
+        ArrowRight: { keyCode: 39, code: "ArrowRight" },
+        Insert: { keyCode: 45, code: "Insert" },
+      };
+      const info = special[key] ?? {
+        keyCode: key.toUpperCase().charCodeAt(0),
+        code: `Key${key.toUpperCase()}`,
+      };
+      const base = { modifiers, key, windowsVirtualKeyCode: info.keyCode, nativeVirtualKeyCode: info.keyCode, code: info.code };
+      await cmd("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+      // A plain printable key also needs a char event to actually insert text.
+      if (!special[key] && modifiers === 0) {
+        await cmd("Input.dispatchKeyEvent", { type: "char", text: key, ...base });
+      }
+      await cmd("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+      await sleep(60);
     },
     press: async (key) => {
       await evaluate(`(() => {

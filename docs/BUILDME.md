@@ -118,6 +118,7 @@ intent's envelope id as `intentId` so a caller can match a reply to its own requ
 ```
 fs.listed { intentId, path, entries: FsEntry[] }           // ← fs.list
 fs.content { intentId, path, content, hash }               // ← fs.read
+fs.wrote { intentId, path, hash }                          // ← fs.write
 git.result { intentId, action, text }                      // ← any git.* intent
 session.list { sessions: SessionMeta[] }                   // on connect
 session.events { sessionId, meta, groups }                 // replayed log, on open + reconnect
