@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseArgs } from "../src/cli.js";
+import { normalizeBrainUrl, parseArgs } from "../src/cli.js";
 
 describe("parseArgs", () => {
   it("takes a repo path", () => {
@@ -35,5 +35,36 @@ describe("parseArgs", () => {
   it("needs a repo path", () => {
     expect(() => parseArgs(["serve"])).toThrow(/needs a repo path/);
     expect(() => parseArgs(["serve", "/a", "/b"])).toThrow(/only one repo/);
+  });
+});
+
+describe("normalizeBrainUrl", () => {
+  it("appends /v1 when there is no path", () => {
+    expect(normalizeBrainUrl("http://192.168.1.40:8080")).toBe("http://192.168.1.40:8080/v1");
+    expect(normalizeBrainUrl("http://192.168.1.40:8080/")).toBe("http://192.168.1.40:8080/v1");
+    expect(normalizeBrainUrl("https://box.lan")).toBe("https://box.lan/v1");
+  });
+
+  it("leaves an explicit path alone", () => {
+    expect(normalizeBrainUrl("http://box:8080/v1")).toBe("http://box:8080/v1");
+    expect(normalizeBrainUrl("http://box:8080/openai/v1")).toBe("http://box:8080/openai/v1");
+  });
+
+  it("strips a trailing slash and any query or fragment", () => {
+    expect(normalizeBrainUrl("http://box:8080/v1/")).toBe("http://box:8080/v1");
+    expect(normalizeBrainUrl("http://box:8080/v1?k=1#x")).toBe("http://box:8080/v1");
+  });
+
+  it("rejects a non-http scheme or a non-URL", () => {
+    expect(() => normalizeBrainUrl("box:8080")).toThrow(/http\(s\)/);
+    expect(() => normalizeBrainUrl("ftp://box/v1")).toThrow(/http\(s\)/);
+    expect(() => normalizeBrainUrl("::::")).toThrow(/must be a URL/);
+  });
+
+  it("normalizes through parseArgs too", () => {
+    expect(parseArgs(["serve", "/r", "--brain", "http://192.168.1.40:8080"])).toMatchObject({
+      brain: "http://192.168.1.40:8080/v1",
+      rawBrain: "http://192.168.1.40:8080",
+    });
   });
 });

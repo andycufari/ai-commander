@@ -3,4 +3,9 @@ export { loadConfig, mergeRules, ensureProjectDir, globalDir, projectDir, type L
 export { resolveInRoot, toRepoPath, PathEscapeError } from "./paths.js";
 export { SessionStore } from "./sessions.js";
 export { handleIntent, git, gitState, type Ctx } from "./intents.js";
+export { Loop, CORE_ENABLED, type LoopDeps } from "./loop.js";
+export { BrainClient, BrainError, type BrainMessage, type BrainTurn, type ToolSpec } from "./brain.js";
+export { runTool, toolSpecs, capOutput, globFiles, globToRegExp, type ToolCtx } from "./tools.js";
+export { parseTextToolCalls, repairJson, extractFirstObject, stripToolMarkup, ToolParseError } from "./toolcalls.js";
+export { zodToJsonSchema } from "./jsonschema.js";
 export { parseArgs, main, runCli } from "./cli.js";

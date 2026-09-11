@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harness — commander v1</title>
+<style>
+  :root{
+    --bg:#0e1210; --panel:#131916; --line:#26312b; --line-hi:#8ee6a1;
+    --ink:#c9d6cc; --dim:#6f8074; --hi:#8ee6a1; --amber:#e6b35a; --sel:#1c2a22; --red:#e07a6a;
+    --mono:"JetBrains Mono","IBM Plex Mono","SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.55 var(--mono)}
+  .doc{max-width:1160px;margin:0 auto;padding:40px 24px 80px}
+  h1{font-size:22px;font-weight:600;margin:0 0 6px;color:var(--hi)}
+  h2{font-size:15px;font-weight:600;margin:56px 0 8px;border-top:1px solid var(--line);padding-top:20px}
+  h2 small{color:var(--dim);font-weight:400;margin-left:10px}
+  p{max-width:78ch;margin:6px 0 14px}
+  .dim{color:var(--dim)} .amber{color:var(--amber)} .hi{color:var(--hi)}
+  code{color:var(--amber)}
+  ul{max-width:78ch;padding-left:18px;margin:6px 0} li{margin:2px 0}
+  table{border-collapse:collapse;margin:8px 0 14px} td,th{border:1px solid var(--line);padding:4px 10px;text-align:left;vertical-align:top} th{color:var(--dim);font-weight:400}
+
+  /* ---- the TUI screen ---- */
+  .screen{background:var(--bg);border:1px solid var(--line);margin:14px 0 10px;padding:6px;font-size:11.5px;line-height:1.45;display:grid;grid-template-rows:auto 1fr auto auto;height:540px;position:relative}
+  .screen.short{height:300px}
+  .topline{display:flex;gap:16px;color:var(--dim);padding:0 4px 4px}
+  .topline b{color:var(--ink);font-weight:500}
+  .topline .r{margin-left:auto;display:flex;gap:16px}
+  .cols{display:grid;grid-template-columns:1fr 6px 1fr;min-height:0}
+  .gutter{cursor:col-resize;display:grid;place-items:center;color:var(--line)}
+  .gutter::before{content:"┊";}
+  /* ratatui block: border with title cut into it */
+  .blk{position:relative;border:1px solid var(--line);padding:10px 8px 6px;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+  .blk.focus{border-color:var(--line-hi)}
+  .blk>.t{position:absolute;top:-9px;left:8px;background:var(--bg);padding:0 5px;color:var(--dim);font-size:11px}
+  .blk.focus>.t{color:var(--hi)}
+  .blk>.tb{position:absolute;bottom:-9px;right:8px;background:var(--bg);padding:0 5px;color:var(--dim);font-size:11px}
+  .blk>.tr{position:absolute;top:-9px;right:8px;background:var(--bg);padding:0 5px;color:var(--dim);font-size:11px}
+  .body{white-space:pre;overflow:hidden;flex:1;min-height:0}
+  .body.wrap{white-space:normal}
+  .sel{background:var(--sel);color:var(--hi)}
+  .d{color:var(--hi)}
+  .mark{color:var(--amber)}
+  /* chat */
+  .u::before{content:"you   ";color:var(--dim)} .b::before{content:"brain ";color:var(--amber)}
+  .tool{color:var(--dim);padding-left:6px;border-left:2px solid var(--line);margin:2px 0 2px 38px} .tool i{color:var(--hi);font-style:normal}
+  .m{color:var(--hi)} .sk{color:var(--amber)}
+  .spin{color:var(--amber)}
+  /* prompt attached to bottom */
+  .prompt{border:1px solid var(--line);margin-top:6px;padding:4px 8px;white-space:pre;color:var(--ink);position:relative}
+  .blk.focus .prompt{border-color:var(--line-hi)}
+  .prompt .t{position:absolute;top:-9px;left:8px;background:var(--bg);padding:0 5px;color:var(--dim);font-size:11px}
+  .prompt .tb{position:absolute;bottom:-9px;right:8px;background:var(--bg);padding:0 5px;color:var(--dim);font-size:11px}
+  .cur{color:var(--hi)}
+  /* status + fkeys */
+  .status{display:flex;gap:18px;color:var(--dim);padding:6px 4px 2px}
+  .status .r{margin-left:auto;display:flex;gap:18px}
+  .fkeys{display:flex;padding-top:2px}
+  .fkeys span{flex:1;color:var(--dim);white-space:nowrap;overflow:hidden}
+  .fkeys b{color:var(--amber);font-weight:500;margin-right:3px}
+  .fkeys .ctx{color:var(--ink)}
+  /* NC-style popup */
+  .popup{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);background:var(--panel);border:3px double var(--hi);padding:14px 18px 12px;white-space:pre;box-shadow:10px 10px 0 rgba(0,0,0,.5);font-size:11.5px}
+  .popup .t{position:absolute;top:-9px;left:14px;background:var(--panel);padding:0 6px;color:var(--hi)}
+  .btn{display:inline-block;border:1px solid var(--line);padding:0 8px;margin:6px 8px 0 0;color:var(--ink)}
+  .btn.on{border-color:var(--hi);color:var(--hi);background:var(--sel)}
+  .btn b{color:var(--amber);font-weight:500}
+  .picker{position:absolute;left:8px;right:8px;bottom:64px;background:var(--panel);border:1px solid var(--line-hi);padding:10px 8px 6px;white-space:pre;font-size:11.5px}
+  .picker .t{position:absolute;top:-9px;left:8px;background:var(--panel);padding:0 5px;color:var(--hi);font-size:11px}
+  .picker .tabs{color:var(--dim);margin-bottom:4px}
+  .picker .tabs b{color:var(--hi);font-weight:500}
+  .verdict{border-left:2px solid var(--amber);padding:6px 12px;margin:10px 0;max-width:78ch}
+  .stack{white-space:pre;font-size:11.5px;line-height:1.4;color:var(--dim);border:1px solid var(--line);padding:12px 14px;max-width:78ch;margin:8px 0 14px}
+  .stack b{color:var(--ink);font-weight:500} .stack i{color:var(--amber);font-style:normal}
+</style>
+</head>
+<body>
+<div class="doc">
+
+<h1>harness — commander v1</h1>
+<p class="dim">Layout A, redrawn Ratatui-style: every region is a bordered block with its title cut into the frame, focus = bright border, the F-key bar reads what's under the cursor. Same palette as v0. Panels split by a draggable gutter (┊) that also answers Ctrl+←/→.</p>
+
+<!-- ================================================================ 1 -->
+<h2>1 · File manager focused <small>F-keys are NC's, because you already know them</small></h2>
+<p>Left panel is a file manager. The bar shows file actions only. Insert marks files; <code>@</code> sends the marked set to the chat prompt as mentions; Enter on a file opens it in the other panel with the right viewer.</p>
+
+<div class="screen">
+  <div class="topline"><b>harness</b><span>~/lab/corner-sensor</span><span class="hi">git main ✓</span><div class="r"><span class="amber">brain qwen3-27b @ 192.168.1.40</span><span>ctx 41k/128k</span></div></div>
+  <div class="cols">
+    <div class="blk focus"><div class="t">files · corner-sensor</div><div class="tr">2 marked</div>
+      <div class="body"><span class="d">▾ firmware/</span>
+<span class="mark">  ✓ main.c</span>                     6.1k   sep 09
+    sleep.c                    1.4k   sep 08
+    config.h                    .3k   aug 30
+<span class="d">▾ hw/</span>
+<span class="sel">    sensor.kicad_sch           41k   sep 10 </span>
+<span class="mark">  ✓ sensor-bom.csv</span>              2k   sep 10
+    sensor-v2.pdf              1.2M   aug 21
+<span class="d">▸ cad/</span>
+<span class="d">▾ skills/</span>                             <span class="dim">4</span>
+    esp32-lowpower/
+    kicad-review/
+<span class="d">▸ .harness/</span>                           <span class="dim">sessions · db · viewers</span>
+  AGENTS.md                    3.2k   sep 02
+  BUILDME.md                   9.8k   sep 09
+  NOTES.md                     1.1k   sep 10</div>
+      <div class="tb">1 of 3 dirs · 14 files</div>
+    </div>
+    <div class="gutter"></div>
+    <div class="blk"><div class="t">chat · sensor-firmware</div><div class="tr">3 sessions</div>
+      <div class="body wrap">
+<div class="u">why is deep-sleep current 4mA? see <span class="m">@firmware/main.c</span> <span class="sk">/esp32-lowpower</span></div>
+<div class="tool">read_file <i>firmware/main.c</i>  212 lines</div>
+<div class="tool">read_file <i>skills/esp32-lowpower/SKILL.md</i></div>
+<div class="b">GPIO 4/5 float during sleep, so the sensor LDO stays on. Hold both low before <code>esp_deep_sleep_start()</code>, or put the rail behind Q1. Want me to show Q1?</div>
+      </div>
+      <div class="prompt"><span class="t">prompt</span>
+<span class="dim">›</span> 
+<span class="dim">›</span> 
+<span class="tb">⏎ send · ⇧⏎ newline · + attach</span></div>
+    </div>
+  </div>
+  <div class="status"><span>files</span><span>Ins mark</span><span>@ mention marked</span><span>Tab → chat</span><div class="r"><span>idle</span></div></div>
+  <div class="fkeys"><span><b>F1</b>help</span><span><b>F2</b>menu</span><span><b>F3</b><span class="ctx">view</span></span><span><b>F4</b><span class="ctx">edit</span></span><span><b>F5</b><span class="ctx">copy</span></span><span><b>F6</b><span class="ctx">move</span></span><span><b>F7</b><span class="ctx">mkdir</span></span><span><b>F8</b><span class="ctx">delete</span></span><span><b>F9</b><span class="ctx">upload</span></span><span><b>F10</b>quit</span></div>
+</div>
+<ul>
+  <li>F3 view / F4 edit open in the <i>other</i> panel — the manager never leaves your side.</li>
+  <li>F9 upload = native file dialog (desktop) or drop zone (web); drops land in the current dir.</li>
+  <li>F2 menu is the per-place context menu: rename, duplicate, open in system app, copy path, git log for file.</li>
+</ul>
+
+<!-- ================================================================ 2 -->
+<h2>2 · Chat focused, brain in a loop <small>same screen, the bar changes</small></h2>
+<p>Focus moved right. The bar now shows session actions. The brain is mid tool-loop: the spinner sits where the next reply goes, tool calls stream in, the status line counts them, and <code>Esc</code> cancels — exactly Claude Code. The prompt stays attached to the bottom and grows with the text (up to ~40% of the panel, then scrolls).</p>
+
+<div class="screen">
+  <div class="topline"><b>harness</b><span>~/lab/corner-sensor</span><span class="hi">git main ●</span><div class="r"><span class="amber">brain qwen3-27b @ 192.168.1.40</span><span>ctx 58k/128k</span></div></div>
+  <div class="cols">
+    <div class="blk"><div class="t">view · hw/sensor.kicad_sch</div><div class="tr">circuit</div>
+      <div class="body" style="display:grid;place-items:center;color:var(--dim);border:1px dashed var(--line);margin:2px">circuit viewer
+<span style="font-size:10px">click net/part → adds mention to prompt</span></div>
+      <div class="tb">Q1 selected</div>
+    </div>
+    <div class="gutter"></div>
+    <div class="blk focus"><div class="t">chat · sensor-firmware</div><div class="tr"><span class="amber">running</span></div>
+      <div class="body wrap">
+<div class="u">yes, and move the rail behind Q1. update the schematic, the bom and NOTES.md</div>
+<div class="tool">read_file <i>hw/sensor.kicad_sch</i>  ok</div>
+<div class="tool">edit_file <i>hw/sensor.kicad_sch</i>  +14 −3</div>
+<div class="tool">sql <i>update parts set net='VSENS_SW' where ref='U3'</i>  1 row</div>
+<div class="tool">edit_file <i>hw/sensor-bom.csv</i>  +1 −0</div>
+<div class="tool"><span class="spin">⠹</span> shell <i>kicad-cli sch erc hw/sensor.kicad_sch</i> …</div>
+      </div>
+      <div class="prompt"><span class="t">prompt</span>
+<span class="dim">›</span> after that, write a short section in NOTES.md explaining the
+<span class="dim">›</span> tradeoff (extra FET vs 4mA) so future-me remembers<span class="cur">▍</span>
+<span class="tb">queued · sends when loop ends</span></div>
+    </div>
+  </div>
+  <div class="status"><span class="amber">running · 5 tools · 12s</span><span>Esc cancel</span><span>Tab → files</span><div class="r"><span>3 files changed</span></div></div>
+  <div class="fkeys"><span><b>F1</b>help</span><span><b>F2</b><span class="ctx">+ attach</span></span><span><b>F3</b><span class="ctx">sessions</span></span><span><b>F4</b><span class="ctx">system</span></span><span><b>F5</b><span class="ctx">model</span></span><span><b>F6</b><span class="ctx">compact</span></span><span><b>F7</b><span class="ctx">rewind</span></span><span><b>F8</b><span class="ctx">clear</span></span><span><b>F9</b><span class="ctx">open ▸</span></span><span><b>F10</b>quit</span></div>
+</div>
+<ul>
+  <li>Typing while the loop runs is allowed; the message queues (Claude Code behaviour).</li>
+  <li>Esc once = cancel current tool, loop stops, partial reply is kept and marked <span class="dim">cancelled</span>. Esc twice = rewind navigator (v0 overlay, unchanged).</li>
+  <li>F9 "open ▸" opens whatever the cursor is on (a mention, a tool's file) in the other panel.</li>
+</ul>
+
+<!-- ================================================================ 3 -->
+<h2>3 · Permission popup <small>the NC dialog, doing something useful</small></h2>
+<p>Every <code>shell</code> call passes through a regex allow/deny list in <code>.harness/rules.json</code> (project) merged with a global one. A match opens this dialog and blocks the loop. Same dialog for <code>git push</code>, writes outside the repo, and network calls.</p>
+
+<div class="screen short">
+  <div class="topline"><b>harness</b><span>~/lab/corner-sensor</span><div class="r"><span class="amber">running · paused</span></div></div>
+  <div class="cols">
+    <div class="blk"><div class="t">files</div><div class="body dim">…</div></div><div class="gutter"></div>
+    <div class="blk focus"><div class="t">chat · sensor-firmware</div><div class="body dim">…</div></div>
+  </div>
+  <div class="popup"><div class="t">permission</div>brain wants to run
+
+  <span class="hi">rm -rf build/ dist/</span>
+
+matched rule   <span class="dim">rm -rf   (project · .harness/rules.json)</span>
+reason         <span class="dim">"clean old artifacts before rebuilding"</span>
+
+<span class="btn on"><b>Y</b> allow once</span><span class="btn"><b>S</b> allow for session</span><span class="btn"><b>E</b> edit command</span><span class="btn"><b>N</b> deny</span></div>
+  <div class="status"><span>⇥ / ←→ move · ⏎ pick · Esc = deny</span></div>
+  <div class="fkeys"></div>
+</div>
+<ul>
+  <li>"Deny" returns a tool error to the brain with the rule text, so it can propose something else instead of dying.</li>
+  <li>"Edit" lets you fix the command inline and run the fixed one; the edited command is what goes in the log.</li>
+</ul>
+
+<!-- ================================================================ 4 -->
+<h2>4 · The + picker <small>attach files, skills, tools, images — and the harness files them correctly</small></h2>
+<p>The <code>+</code> in the prompt (or F2, or typing <code>@ / #</code>) opens one picker with four tabs. Whatever you pick shows in the prompt as a chip, but the harness decides <b>where it lands in context</b> so the model reads it well.</p>
+
+<div class="screen short" style="height:330px">
+  <div class="topline"><b>harness</b></div>
+  <div class="cols">
+    <div class="blk"><div class="t">files</div><div class="body dim">…</div></div><div class="gutter"></div>
+    <div class="blk focus"><div class="t">chat</div>
+      <div class="body wrap dim">…</div>
+      <div class="picker"><div class="t">attach</div><div class="tabs"><b>@ files</b>   / skills   # tools   ! images        <span class="dim">type to filter</span></div><span class="sel"> hw/sensor.kicad_sch      circuit   41k   → context: file block            </span>
+ hw/sensor-bom.csv        table      2k   → context: file block
+ firmware/main.c          code       6k   → context: file block
+ <span class="dim">marked in files panel (2)                   → all as file blocks</span>
+<span class="dim">⏎ attach   ⌃⏎ attach + open in other panel   Esc close</span></div>
+      <div class="prompt"><span class="t">prompt</span>
+<span class="dim">›</span> check the pinout in <span class="m">[@ sensor.kicad_sch]</span> against <span class="sk">[/ kicad-review]</span> using <span class="amber">[# sql]</span><span class="cur">▍</span>
+<span class="tb">+ attach</span></div>
+    </div>
+  </div>
+  <div class="status"></div><div class="fkeys"></div>
+</div>
+
+<table>
+<tr><th>you attach</th><th>what the harness does</th><th>keeps context clean because</th></tr>
+<tr><td><span class="m">@file</span></td><td>reads it once, inserts as a fenced file block above your message, tracked by hash; re-reads only if it changed</td><td>no duplicates across turns</td></tr>
+<tr><td><span class="sk">/skill</span></td><td>inserts SKILL.md into a <code>&lt;skill&gt;</code> block for this session; skills not mentioned are only listed by name in the system prompt</td><td>4 skills ≠ 4 × 3k tokens on every turn</td></tr>
+<tr><td><span class="amber">#tool</span></td><td>enables that tool's schema for this session (sql, comfyui, cad-render…); core tools (read/edit/grep/shell/git) are always on</td><td>the model isn't choosing between 30 tools</td></tr>
+<tr><td>!image</td><td>attaches as vision input; stored in <code>.harness/sessions/&lt;id&gt;/img/</code>; clickable → opens in other panel</td><td>—</td></tr>
+</table>
+
+<!-- ================================================================ 5 -->
+<h2>5 · What the brain sees <small>system prompt is a file you can edit (F4)</small></h2>
+<p>Context is assembled in a fixed order every turn. Two layers are yours: the harness manual and the project boot. F4 opens either in the other panel as a plain md editor.</p>
+
+<div class="stack"><b>1 · harness manual</b>        <i>.harness/system.md</i>        editable — how panels, mentions, open_in_panel,
+                                                        permissions and the sql tool work; the brain's UX contract
+<b>2 · project boot</b>          <i>AGENTS.md</i> or <i>CLAUDE.md</i>     loaded from repo root if present
+                             <i>BOOT.md · SOUL.md · rules/*</i>    optional, loaded in that order if present
+                                                        (file-organisation rules, voice, what never to touch)
+<b>3 · skills index</b>          <i>skills/*/SKILL.md</i>            names + one-line descriptions only
+<b>4 · enabled tools</b>         core + whatever you # mentioned
+<b>5 · git state</b>             branch, dirty files, last 3 commits  (cheap, refreshed each turn)
+<b>6 · session</b>               messages, with attached file/skill blocks placed above the turn that mentioned them
+                             compacted summary replaces old turns when you press F6</div>
+<ul>
+  <li>Projects can lock layer 2 with a <code>.harness/config.json</code> → <code>"boot": ["AGENTS.md","SOUL.md","rules/"]</code> so the sequence is explicit, not guessed.</li>
+  <li>Layer 1 is where the "self-improve" story lives: when the brain writes a new viewer into <code>.harness/viewers/</code>, it also appends a line to the manual describing it.</li>
+</ul>
+
+<!-- ================================================================ decisions -->
+<h2>Captured from your reply <small>goes straight into the BUILDME</small></h2>
+<table>
+<tr><th>decision</th><th>spec</th></tr>
+<tr><td>Layout</td><td>A · Commander. Two panels, resizable gutter, each panel hosts tabbed views.</td></tr>
+<tr><td>Quick actions</td><td>Context-relative F-key bar. File manager = NC keys (F3 view, F4 edit, F5 copy, F6 move, F7 mkdir, F8 delete). Chat = session keys.</td></tr>
+<tr><td>Prompt</td><td>Attached to bottom of chat panel, multiline (⇧⏎), grows to 40% then scrolls, queues while loop runs.</td></tr>
+<tr><td>Loop</td><td>Claude Code semantics: streaming tool calls, Esc cancels, partial kept, Esc Esc = rewind.</td></tr>
+<tr><td>Permissions</td><td>Regex rules (global + project) on shell/git/network; NC double-border dialog; allow once / session / edit / deny.</td></tr>
+<tr><td>Skills</td><td>Auto-discovered from <code>skills/</code>; index in system prompt; full content only when mentioned.</td></tr>
+<tr><td>+ picker</td><td>One picker, four tabs (@ / # !). Harness owns placement in context.</td></tr>
+<tr><td>System prompt</td><td><code>.harness/system.md</code>, editable in-app, then project boot sequence (AGENTS/CLAUDE → BOOT/SOUL/rules), configurable.</td></tr>
+<tr><td>Look</td><td>Ratatui blocks, titles in borders, bright border = focus. Palette: green-black / phosphor / amber for the brain.</td></tr>
+</table>
+
+<p><b>Still open</b> — answer these and the spec is writable:</p>
+<table>
+<tr><th>#</th><th>question</th><th>my default</th></tr>
+<tr><td>1</td><td>Web first or desktop first?</td><td>Web (Vite + React, Node backend on the repo). Desktop = same app in Tauri or Electron shell later; Tauri is lighter on mac/linux.</td></tr>
+<tr><td>2</td><td>Backend ↔ UI transport</td><td>WebSocket, JSON events (tool_start, tool_end, token, permission_request). One backend per repo, multiple sessions.</td></tr>
+<tr><td>3</td><td>Rendering: real terminal (xterm + Ratatui-like in JS) or DOM styled as terminal?</td><td>DOM styled as terminal. Viewers (CAD, circuit, images) need a real DOM anyway.</td></tr>
+<tr><td>4</td><td>Multiple projects open at once?</td><td>No. One repo per window. Open another window.</td></tr>
+<tr><td>5</td><td>Session log format</td><td><code>.harness/sessions/&lt;id&gt;.jsonl</code> (one event per line, replayable) + sqlite index for search/rewind.</td></tr>
+</table>
+
+</div>
+</body>
+</html>

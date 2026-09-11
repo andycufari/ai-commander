@@ -11,10 +11,15 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "dev": "pnpm --filter @aicommander/core build && node bin/aicommander serve ."
+    "dev": "pnpm --filter @aicommander/core build && node bin/aicommander serve .",
+    "chat": "tsc -p scripts && node .scripts-dist/chat.js"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "ws": "^8.18.0",
+    "@aicommander/protocol": "workspace:*"
   }
 }

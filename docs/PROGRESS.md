@@ -11,10 +11,11 @@ Update the checklist as items land. One commit per item (`M0: protocol package` 
 - [x] 1. pnpm monorepo + `packages/protocol` (zod: WS intents, events, tool schemas, config)
 - [x] 2. Backend `serve` with WS (`packages/core` + `bin/aicommander`), HTTP `/file`, `/upload`, `/static`, `--brain` override
 - [ ] 3. Web app shell — single panel, chat only (React + Vite, tokens from mockups)
-- [ ] 4. Brain client — streaming, tools, `toolFormat: auto` (OpenAI native + text-tag fallback)
-- [ ] 5. Core tools — read_file, write_file, edit_file, glob, grep, shell, git, ask_user
-- [ ] 6. Session store — `session.jsonl` + `meta.json`; reload restores the chat
-- [ ] 7. Esc cancel (mid-loop, keeps partial text, marks group `cancelled`)
+- [x] 4. Brain client — streaming, tools, `toolFormat: auto` (OpenAI native + text-tag fallback)
+- [~] 5. Core tools — read_file, write_file, edit_file, glob, grep, shell, git ✓;
+      `ask_user` still to do (needs the modal round trip, lands with M2 permissions)
+- [x] 6. Session store — `session.jsonl` + `meta.json`; reload restores the chat
+- [x] 7. Esc cancel (mid-loop, keeps partial text, marks group `cancelled`)
 
 **Demo (must pass before M1):** open `~/lab/x`, ask "list the files and summarize BUILDME.md",
 see streaming tool calls, cancel mid-loop, reload the page → same session.
@@ -89,7 +90,10 @@ Context inspector matches what's sent.
 
 ## Notes / open questions
 
-- `docs/mockups/` currently holds only `ai-commander-v2-modals-options.html`.
-  `v0-layouts.html` and `v1-commander.html` are referenced by BUILDME §0 but missing —
-  needed before M1 UI work (tokens/palette come from them).
+- Palette lives in `apps/web/src/tokens.css`, copied from `harness-layouts-v0.html` `:root`.
+- Brain box: `192.168.1.44:8001` (llama.cpp, model id `local-brain`, 27B Q4_K_M, 98k ctx).
+  `.40` from BUILDME §9 is not currently up.
+- `scripts/chat.ts` drives a session from the terminal until the web app lands
+  (`pnpm chat -- --new`). Esc cancels; `/cancel` and `/quit` also work.
+- Item 3 (web app shell) is the only M0 item left.
 - Open decisions tracked in BUILDME §15.

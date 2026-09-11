@@ -13,10 +13,36 @@ const USAGE = `aicommander serve <repo> [options]
   -h, --help      this
 `;
 
+/**
+ * `--brain http://192.168.1.40:8080` is what you actually type; the client needs the
+ * OpenAI-compatible base, so append /v1 when the URL has no path of its own. A URL that
+ * already ends in /v1 — or points somewhere deliberate like /openai/v1 — is left alone.
+ */
+export function normalizeBrainUrl(input: string): string {
+  let parsed: URL;
+  try {
+    // `new URL` alone accepts things like "box:8080" (scheme "box:"), so the scheme is
+    // checked below rather than trusted.
+    parsed = new URL(input);
+  } catch {
+    throw new Error(`--brain must be a URL, got: ${input}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`--brain must be an http(s) URL, got: ${input}`);
+  }
+  const path = parsed.pathname.replace(/\/+$/, "");
+  if (path === "") parsed.pathname = "/v1";
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString().replace(/\/+$/, "");
+}
+
 interface Parsed {
   repo: string;
   port: number;
   brain?: string;
+  /** What the user typed, kept only so the banner can show what changed. */
+  rawBrain?: string;
   staticDir?: string;
 }
 
@@ -27,6 +53,7 @@ export function parseArgs(argv: string[]): Parsed {
   let repo: string | undefined;
   let port = 7777;
   let brain: string | undefined;
+  let rawBrain: string | undefined;
   let staticDir: string | undefined;
 
   for (let i = 0; i < rest.length; i += 1) {
@@ -45,19 +72,8 @@ export function parseArgs(argv: string[]): Parsed {
         break;
       }
       case "--brain": {
-        const url = next();
-        // `new URL` alone accepts things like "box:8080" (scheme "box:"), which would
-        // then fail deep inside the brain client — check the scheme here instead.
-        let parsed: URL;
-        try {
-          parsed = new URL(url);
-        } catch {
-          throw new Error(`--brain must be a URL, got: ${url}`);
-        }
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-          throw new Error(`--brain must be an http(s) URL, got: ${url}`);
-        }
-        brain = url;
+        rawBrain = next();
+        brain = normalizeBrainUrl(rawBrain);
         break;
       }
       case "--static":
@@ -71,7 +87,7 @@ export function parseArgs(argv: string[]): Parsed {
   }
 
   if (!repo) throw new Error(`serve needs a repo path\n\n${USAGE}`);
-  return { repo: resolve(repo), port, brain, staticDir };
+  return { repo: resolve(repo), port, brain, rawBrain, staticDir };
 }
 
 export async function main(): Promise<void> {
@@ -95,6 +111,10 @@ export async function main(): Promise<void> {
       `  http://localhost:${serving.port}\n` +
       `  brain  ${serving.config.brain.model} @ ${where}\n`,
   );
+  // Say so when /v1 was appended, so the logged URL is never a surprise.
+  if (args.brain && args.rawBrain && args.rawBrain !== args.brain) {
+    process.stdout.write(`         normalized from ${args.rawBrain}\n`);
+  }
 
   const stop = () => {
     void serving.close().then(() => process.exit(0));

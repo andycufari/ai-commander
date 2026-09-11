@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harness — layout studies v0</title>
+<style>
+  :root{
+    --bg:#0e1210;        /* deep green-black, not neutral black */
+    --panel:#131916;
+    --line:#26312b;
+    --ink:#c9d6cc;       /* phosphor, desaturated */
+    --dim:#6f8074;
+    --hi:#8ee6a1;        /* phosphor green — brand */
+    --amber:#e6b35a;     /* the brain speaks in amber */
+    --sel:#1c2a22;
+    --mono:"JetBrains Mono","IBM Plex Mono","SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.55 var(--mono)}
+  a{color:var(--hi)}
+  .doc{max-width:1120px;margin:0 auto;padding:40px 24px 80px}
+  h1{font-size:22px;font-weight:600;margin:0 0 6px;color:var(--hi)}
+  h2{font-size:15px;font-weight:600;margin:56px 0 8px;color:var(--ink);border-top:1px solid var(--line);padding-top:20px}
+  h2 small{color:var(--dim);font-weight:400;margin-left:10px}
+  p{max-width:78ch;margin:6px 0 14px}
+  .dim{color:var(--dim)}
+  .amber{color:var(--amber)}
+  .hi{color:var(--hi)}
+  code{color:var(--amber)}
+  ul{max-width:78ch;padding-left:18px;margin:6px 0}
+  li{margin:2px 0}
+  table{border-collapse:collapse;margin:8px 0 14px}
+  td,th{border:1px solid var(--line);padding:4px 10px;text-align:left;vertical-align:top}
+  th{color:var(--dim);font-weight:400}
+
+  /* ---- mock app frame ---- */
+  .frame{background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden;margin:14px 0 10px;display:grid;grid-template-rows:26px 1fr 22px;height:520px;font-size:11.5px;line-height:1.45}
+  .frame.tall{height:600px}
+  .titlebar{display:flex;align-items:center;gap:14px;padding:0 12px;border-bottom:1px solid var(--line);color:var(--dim)}
+  .titlebar b{color:var(--ink);font-weight:500}
+  .titlebar .right{margin-left:auto;display:flex;gap:14px}
+  .body{display:grid;min-height:0}
+  .pane{display:grid;grid-template-rows:24px 1fr;min-height:0;border-right:1px solid var(--line)}
+  .pane:last-child{border-right:0}
+  .tabs{display:flex;border-bottom:1px solid var(--line);padding:0 6px;gap:2px;align-items:flex-end}
+  .tab{padding:3px 10px;color:var(--dim);border:1px solid transparent;border-bottom:0;border-radius:4px 4px 0 0}
+  .tab.on{color:var(--hi);background:var(--bg);border-color:var(--line)}
+  .tab.plus{margin-left:auto}
+  .content{padding:8px 10px;overflow:hidden;white-space:pre;min-height:0}
+  .content.wrap{white-space:normal}
+  .statusbar{display:flex;gap:18px;padding:0 12px;align-items:center;border-top:1px solid var(--line);color:var(--dim)}
+  .statusbar .right{margin-left:auto;display:flex;gap:18px}
+  .fkeys{display:flex;gap:0;padding:0;border-top:1px solid var(--line)}
+  .fkeys span{flex:1;text-align:center;color:var(--dim);border-right:1px solid var(--line)}
+  .fkeys span:last-child{border:0}
+  .fkeys b{color:var(--amber);font-weight:500}
+  .split{position:relative}
+  .gutter{position:absolute;top:0;bottom:0;width:6px;left:calc(50% - 3px);cursor:col-resize;background:linear-gradient(var(--line),var(--line)) center/1px 100% no-repeat}
+
+  /* chat bits */
+  .u{color:var(--ink)}
+  .u::before{content:"you  ";color:var(--dim)}
+  .b{color:var(--ink)}
+  .b::before{content:"brain";color:var(--amber);margin-right:6px}
+  .tool{color:var(--dim);padding-left:6px;border-left:2px solid var(--line);margin:2px 0 2px 34px}
+  .tool i{color:var(--hi);font-style:normal}
+  .m{color:var(--hi)}      /* @mention */
+  .sk{color:var(--amber)}  /* /skill   */
+  .prompt{margin-top:8px;padding:6px 8px;border:1px solid var(--line);border-radius:4px;color:var(--dim)}
+  .prompt b{color:var(--hi);font-weight:500}
+  .sel{background:var(--sel);color:var(--hi)}
+  .tree .d{color:var(--hi)}
+  .cad{display:grid;place-items:center;height:100%;color:var(--dim);border:1px dashed var(--line);border-radius:4px}
+  .drawer{position:absolute;right:0;top:0;bottom:0;width:38%;background:var(--panel);border-left:1px solid var(--line);box-shadow:-20px 0 30px rgba(0,0,0,.35)}
+  .overlay{position:absolute;inset:0;background:rgba(8,12,10,.55);display:grid;place-items:center}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:6px;width:62%;padding:10px 12px;white-space:pre;font-size:11.5px;line-height:1.5}
+  .modal .t{color:var(--dim);border-bottom:1px solid var(--line);margin-bottom:6px;padding-bottom:4px}
+  .pop{position:absolute;left:8px;bottom:36px;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:4px 0;font-size:11.5px;white-space:pre;width:280px}
+  .pop div{padding:1px 10px}
+  .pop .on{background:var(--sel);color:var(--hi)}
+  .verdict{border-left:2px solid var(--amber);padding:6px 12px;margin:10px 0;color:var(--ink);max-width:78ch}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:24px;max-width:78ch}
+  .two h4{margin:8px 0 2px;font-weight:500;color:var(--dim);font-size:12px}
+  .ascii{color:var(--dim);white-space:pre;font-size:11.5px;line-height:1.35;margin:8px 0 12px}
+</style>
+</head>
+<body>
+<div class="doc">
+
+<h1>harness — layout studies v0</h1>
+<p class="dim">Four layouts for the same app. Same shell, different answer to one question: what owns the screen — the chat, the files, or the thing you're building? Pick one, mark up the others, and this becomes the UI section of the BUILDME.</p>
+
+<p>Shared vocabulary used in every mockup:</p>
+<ul>
+  <li><span class="amber">brain</span> — the model, any OpenAI-compatible endpoint (default: LAN box).</li>
+  <li><b>panel</b> — a resizable region that can host any <b>view</b>: chat session, file tree, viewer, editor, sqlite, log.</li>
+  <li><b>viewer</b> — a plugin that renders a file type: md (edit), image/video, CAD (STL/STEP/OpenSCAD), circuit (KiCad/schematic), csv/sqlite.</li>
+  <li><b>mention</b> — <span class="m">@file</span>, <span class="sk">/skill</span>, <code>#tool</code>. Mentioned things become clickable and open in the other panel.</li>
+</ul>
+
+<!-- ================================================================ A -->
+<h2>A · Commander <small>two equal panels, each hosts any view</small></h2>
+<p>The Norton Commander answer. Both panels are peers; a panel is a chat, a tree, or a viewer depending on its active tab. Tab ⇄ swaps focus, the brain "opens X in the other panel". Function-key bar makes the whole thing keyboard-first.</p>
+
+<div class="frame">
+  <div class="titlebar"><b>harness</b> <span>~/lab/corner-sensor</span> <span class="hi">main ✓</span>
+    <div class="right"><span class="amber">brain: qwen3-27b @ 192.168.1.40</span><span>ctx 41k / 128k</span></div></div>
+  <div class="body split" style="grid-template-columns:1fr 1fr">
+    <div class="gutter"></div>
+    <div class="pane">
+      <div class="tabs"><span class="tab on">chat · sensor-firmware</span><span class="tab">chat · enclosure</span><span class="tab">files</span><span class="tab plus">+</span></div>
+      <div class="content wrap">
+<div class="u">read <span class="m">@firmware/main.c</span> and <span class="sk">/skills/esp32-lowpower</span>, then tell me why the deep-sleep current is 4mA</div>
+<div class="b">Reading both.</div>
+<div class="tool">read_file  <i>firmware/main.c</i>  212 lines</div>
+<div class="tool">read_file  <i>skills/esp32-lowpower/SKILL.md</i></div>
+<div class="tool">grep  <i>"gpio_hold"</i>  → 0 matches</div>
+<div class="b">The radio is off, but GPIO 4 and 5 are left floating and <code>gpio_hold_en</code> is never called, so the LDO on the sensor board stays enabled through sleep. Two options:<br>&nbsp;1. hold both pins low before <code>esp_deep_sleep_start()</code><br>&nbsp;2. move the sensor rail behind Q1 and drive it from GPIO 12<br>I opened the schematic in the right panel so you can see Q1.</div>
+<div class="tool">open_in_panel  <i>hw/sensor.kicad_sch</i>  → right</div>
+<div class="prompt"><b>›</b> _</div>
+      </div>
+    </div>
+    <div class="pane">
+      <div class="tabs"><span class="tab">files</span><span class="tab on">sensor.kicad_sch</span><span class="tab">NOTES.md</span></div>
+      <div class="content"><div class="cad">circuit viewer<br><span style="font-size:10px">pan · zoom · click net → mention in chat</span></div></div>
+    </div>
+  </div>
+  <div class="fkeys"><span><b>F1</b> help</span><span><b>F2</b> mention</span><span><b>F3</b> view</span><span><b>F4</b> edit</span><span><b>F5</b> upload</span><span><b>F6</b> model</span><span><b>F7</b> sessions</span><span><b>F8</b> delete</span><span><b>F9</b> compact</span><span><b>F10</b> quit</span></div>
+</div>
+
+<div class="two">
+  <div><h4>works because</h4><ul><li>Two chats side by side is trivial (left: firmware, right: enclosure).</li><li>"Open in other panel" is an obvious primitive for the brain.</li><li>Zero modes to learn — every panel is the same thing.</li></ul></div>
+  <div><h4>costs</h4><ul><li>50/50 is wrong for CAD/circuit work — you'll be resizing constantly.</li><li>File tree competes with chat for a tab slot.</li><li>F-keys collide with browser/OS in the web phase (use Ctrl+1..9 there).</li></ul></div>
+</div>
+
+<!-- ================================================================ B -->
+<h2>B · Chat + dock <small>chat is home, everything else docks beside it</small></h2>
+<p>Claude Code's UX, kept whole. The chat is the primary panel and never loses focus; the right side is a dock with a stacked tree + viewer. The brain opens files into the dock; you can pop the dock into a second chat when you need one.</p>
+
+<div class="frame">
+  <div class="titlebar"><b>harness</b> <span>~/lab/maki</span> <span class="hi">feat/nfc-tags ●</span>
+    <div class="right"><span class="amber">brain: local</span><span>t 0.6 · 128k</span></div></div>
+  <div class="body" style="grid-template-columns:58% 42%">
+    <div class="pane">
+      <div class="tabs"><span class="tab on">session 14 · cassette state machine</span><span class="tab">13</span><span class="tab">12</span></div>
+      <div class="content wrap">
+<div class="u">here's the photo of the new PCB <span class="m">[img: pcb-v3.jpg]</span> — does the tag reader placement match <span class="m">@docs/DECISIONS.md</span>?</div>
+<div class="b">It matches the rule ("reader under the cassette slot, ≤3mm from lid"), but the antenna trace runs under the speaker magnet. That'll kill read range.</div>
+<div class="tool">read_file <i>docs/DECISIONS.md</i></div>
+<div class="tool">sql  <i>select * from parts where ref='U3'</i>  → 1 row</div>
+<div class="b">Want me to draft the note for DECISIONS.md and open it for you to edit?</div>
+<div class="u">yes, open it</div>
+<div class="tool">edit_file <i>docs/DECISIONS.md</i>  +6 −0</div>
+<div class="tool">open_in_panel <i>docs/DECISIONS.md</i>  → dock, edit mode</div>
+<div class="prompt"><b>›</b> _</div>
+      </div>
+    </div>
+    <div class="pane" style="grid-template-rows:1fr 6px 1.4fr">
+      <div class="content tree" style="border-bottom:1px solid var(--line)"><span class="d">▾ maki/</span>
+  <span class="d">▸ firmware/</span>
+  <span class="d">▾ docs/</span>
+    <span class="sel"> DECISIONS.md </span>
+     BUILDME.md
+  <span class="d">▸ hw/</span>
+  <span class="d">▸ skills/</span>   <span class="dim">4</span>
+  <span class="d">▸ .harness/</span> <span class="dim">sessions · db</span>
+   AGENTS.md</div>
+      <div></div>
+      <div class="content" style="border-top:1px solid var(--line)"><span class="dim">docs/DECISIONS.md · edit · unsaved</span>
+
+## 2026-09-10 antenna vs speaker
+
+- Reader stays under the slot (rule 3).
+- Antenna trace must not cross the
+  speaker magnet footprint.<span class="hi">▍</span>
+- Move speaker 8mm toward the hinge.</div>
+    </div>
+  </div>
+  <div class="statusbar"><span>⌃K mention</span><span>⌃O open</span><span>⌃B dock</span><span>⌃J tree</span><span>esc rewind</span><div class="right"><span>3 tools · 1 file changed</span><span class="hi">saved 2s ago</span></div></div>
+</div>
+
+<div class="two">
+  <div><h4>works because</h4><ul><li>Feels like Claude Code on day one; the dock is a bonus, not a mode.</li><li>Tree + viewer stacked means you always see where you are.</li><li>Images attach inline, viewer shows them large on click.</li></ul></div>
+  <div><h4>costs</h4><ul><li>Two parallel chats is a second-class action (pop the dock).</li><li>Dock gets cramped when the viewer is CAD.</li></ul></div>
+</div>
+
+<!-- ================================================================ C -->
+<h2>C · Workbench <small>the artifact owns the screen, chat is the console</small></h2>
+<p>For the sessions where you're iterating a circuit or a CAD part. The viewer is the big thing; chat sits at the bottom like a terminal console; tree is a slim rail. Toggle from any other layout with one key — this is a <b>layout preset</b>, not a different app.</p>
+
+<div class="frame tall">
+  <div class="titlebar"><b>harness</b> <span>~/lab/cm64-watch</span> <span class="hi">main</span> <span>layout: workbench</span>
+    <div class="right"><span class="amber">brain: local</span></div></div>
+  <div class="body" style="grid-template-columns:190px 1fr;grid-template-rows:1fr 190px">
+    <div class="pane content tree" style="grid-row:1/3;padding:8px"><span class="d">▾ cm64-watch/</span>
+  <span class="d">▾ cad/</span>
+    <span class="sel"> case-v7.scad </span>
+     case-v6.scad
+     band-clip.stl
+  <span class="d">▸ firmware/</span>
+  <span class="d">▸ hw/</span>
+   BUILDME.md
+   AGENTS.md
+
+<span class="dim">skills</span>
+   /openscad
+   /esp32-lowpower
+   /kicad-review</div>
+    <div class="pane" style="border-right:0;border-bottom:1px solid var(--line)">
+      <div class="tabs"><span class="tab on">case-v7.scad · 3D</span><span class="tab">source</span><span class="tab">render.png</span></div>
+      <div class="content"><div class="cad">CAD viewer (three.js)<br><span style="font-size:10px">orbit · section · measure · "select face" → mention</span></div></div>
+    </div>
+    <div class="pane" style="border-right:0">
+      <div class="tabs"><span class="tab on">chat · case iteration</span><span class="tab">log</span></div>
+      <div class="content wrap">
+<div class="u">wall is too thin at the button cutout, bump to 1.6 and re-render</div>
+<div class="tool">edit_file <i>cad/case-v7.scad</i>  wall=1.2 → 1.6</div>
+<div class="tool">shell <i>openscad -o render.png case-v7.scad</i>  3.1s</div>
+<div class="b">Done — viewer refreshed. The 7-segment window shrank 0.8mm; still clears the display bezel by 0.4.</div>
+<div class="prompt"><b>›</b> _</div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar"><span>⌃1 commander</span><span>⌃2 chat+dock</span><span class="hi">⌃3 workbench</span><div class="right"><span>render 3.1s</span></div></div>
+</div>
+
+<div class="two">
+  <div><h4>works because</h4><ul><li>The viewer finally gets the pixels it needs.</li><li>Console-height chat is fine when turns are short edits.</li><li>Skills visible in the rail = you remember they exist.</li></ul></div>
+  <div><h4>costs</h4><ul><li>Bad for long reasoning replies — you'll scroll a 190px box.</li><li>Only worth it if viewers are good; ship it after md + image + CAD exist.</li></ul></div>
+</div>
+
+<!-- ================================================================ D -->
+<h2>D · Terminal-first <small>one column, drawers on demand</small></h2>
+<p>The minimal one. Full-width chat exactly like Claude Code; tree, viewer, sessions are drawers that slide over the right third and go away. Least to build, easiest to ship as the web version first, and the natural mobile/narrow layout later.</p>
+
+<div class="frame" style="height:440px">
+  <div class="titlebar"><b>harness</b> <span>~/lab/chepibe</span> <span class="hi">main</span>
+    <div class="right"><span class="amber">brain: local</span></div></div>
+  <div class="body split" style="grid-template-columns:1fr">
+    <div class="pane">
+      <div class="tabs"><span class="tab on">chat · whatsapp bridge</span><span class="tab">chat · billing</span></div>
+      <div class="content wrap">
+<div class="u">why does the order parser drop items with "sin"? see <span class="m">@src/parser.ts</span></div>
+<div class="b">Line 88 splits on the word "sin" to strip modifiers, so "empanada sin cebolla" loses everything after it.</div>
+<div class="tool">read_file <i>src/parser.ts</i></div>
+<div class="prompt"><b>›</b> _</div>
+      </div>
+    </div>
+    <div class="drawer">
+      <div class="tabs"><span class="tab on">src/parser.ts</span><span class="tab">tree</span><span class="tab">sessions</span></div>
+      <div class="content"><span class="dim">86</span>  const parts = line
+<span class="dim">87</span>    .toLowerCase()
+<span class="sel">88    .split(" sin ")</span>
+<span class="dim">89</span>    .map(s =&gt; s.trim());
+<span class="dim">90</span>
+<span class="dim">91</span>  return { item: parts[0],
+<span class="dim">92</span>           mods: parts.slice(1) }</div>
+    </div>
+  </div>
+  <div class="statusbar"><span>⌃O open</span><span>⌃B drawer</span><span>esc rewind</span></div>
+</div>
+
+<div class="two">
+  <div><h4>works because</h4><ul><li>Smallest v0. Chat + tools + drawers is a weekend.</li><li>Nothing to resize.</li></ul></div>
+  <div><h4>costs</h4><ul><li>No side-by-side. Iterating a circuit while chatting means flipping a drawer constantly.</li><li>It's the layout you'll outgrow first.</li></ul></div>
+</div>
+
+<!-- ================================================================ overlays -->
+<h2>Overlays <small>the same in every layout</small></h2>
+
+<p><b>Mention popup</b> — typing <code>@</code>, <code>/</code> or <code>#</code> in the prompt. Fuzzy over files, skills, tools, and recent images. Enter inserts, Ctrl+Enter inserts and opens in the other panel.</p>
+<div class="frame" style="height:230px">
+  <div class="titlebar"><b>harness</b></div>
+  <div class="body split" style="grid-template-columns:1fr">
+    <div class="pane"><div class="tabs"><span class="tab on">chat</span></div>
+      <div class="content wrap"><div class="prompt"><b>›</b> check the pinout in @hw/se</div></div>
+      <div class="pop"><div class="dim"> @ files  / skills  # tools  ! images</div><div class="on"> hw/sensor.kicad_sch        circuit</div><div> hw/sensor-bom.csv          table</div><div> hw/sensor-v2.pdf           pdf</div><div class="dim"> ↵ insert   ⌃↵ insert + open</div></div>
+    </div>
+  </div>
+  <div class="statusbar"></div>
+</div>
+
+<p><b>Session navigator / rewind</b> — F7 or Esc twice. Every message is a group (user turn + brain turn + its tool calls). Arrow to any group; Enter = continue from here (fork, old tail stays in the log), Del = drop the group, x = delete tool outputs but keep the text. This is also where you see token cost per group before compacting.</p>
+<div class="frame" style="height:330px">
+  <div class="titlebar"><b>harness</b></div>
+  <div class="body split" style="grid-template-columns:1fr">
+    <div class="pane"><div class="content wrap dim">chat behind…</div></div>
+    <div class="overlay"><div class="modal"><div class="t">session 14 · cassette state machine        41k tokens · 22 turns</div>  #18  you   "here's the photo of the new PCB…"          <span class="dim">img 1.2k</span>
+       brain  2 tools · 6 lines                         <span class="dim">3.4k</span>
+  #19  you   "yes, open it"
+       brain  edit_file · open_in_panel                  <span class="dim">0.9k</span>
+<span class="sel">▶ #20  you   "now the speaker: can it move 8mm?"        14.1k</span>
+       brain  read_file ×3 · shell · sql                 <span class="dim">← big one</span>
+  #21  you   "ok redo the bom"
+       brain  edit_file · sql
+
+<span class="dim">↵ continue from here   del drop group   x drop tool output   c compact above   / search</span></div></div>
+  </div>
+  <div class="statusbar"></div>
+</div>
+
+<p><b>Model / parameters</b> (F6) — endpoint, model list from the endpoint, temperature, ctx, system prompt overrides. Per-session, with a project default in <code>.harness/config.json</code>.</p>
+
+<!-- ================================================================ recommendation -->
+<h2>My take <small>what I'd put in the BUILDME</small></h2>
+<div class="verdict">Build <b>A (Commander)</b> as the shell — two panels, every panel is a view host — and ship <b>B</b> and <b>C</b> as layout presets on top of it (Ctrl+1/2/3), not as separate UIs. D is what A looks like when you collapse a panel, so it's free. The shell is one component: <code>&lt;Panel views=[chat, tree, viewer, editor, sql, log]&gt;</code>. Everything on your feature list becomes either a view, a tool the brain calls, or an overlay.</div>
+
+<p>Why: your list has three things pulling in different directions (multiple sessions, navigate the tree, iterate a circuit). Only the two-peer-panels model makes all three first-class without a mode switch, and it's the aesthetic you already want.</p>
+
+<p><b>Decisions I need from you before writing the spec</b> (react in a reply, or annotate the file):</p>
+<table>
+<tr><th>#</th><th>question</th><th>my default</th></tr>
+<tr><td>1</td><td>Default layout on open</td><td>A, left = last chat, right = tree</td></tr>
+<tr><td>2</td><td>Can a panel split further (nested)?</td><td>No. Two panels max, each with tabs. Simplicity wins.</td></tr>
+<tr><td>3</td><td>"Open in other panel" — does the brain choose the panel, or always the non-focused one?</td><td>Always the non-focused one; brain never fights your cursor</td></tr>
+<tr><td>4</td><td>F-keys vs Ctrl chords</td><td>Both; F-keys shown in bar, Ctrl+N mirrors them (web-safe)</td></tr>
+<tr><td>5</td><td>Where session logs live</td><td><code>.harness/sessions/&lt;id&gt;.jsonl</code> + sqlite index, git-ignored by default with a toggle</td></tr>
+<tr><td>6</td><td>Viewer plugin API — the "self-improve" story</td><td>A viewer is a folder in <code>.harness/viewers/&lt;name&gt;/</code> with <code>manifest.json</code> (file globs) + a React component; the brain can write one</td></tr>
+<tr><td>7</td><td>Theme</td><td>This palette: green-black bg, phosphor text, amber = brain. One accent each, nothing else.</td></tr>
+</table>
+
+<p><b>Keymap draft</b></p>
+<div class="ascii">Tab          swap panel focus         Esc Esc      session navigator / rewind
+⌃1 ⌃2 ⌃3     layout preset A / B / C  ⌃K           mention picker
+⌃O           open file (fuzzy)        ⌃B           collapse other panel
+⌃N           new session              ⌃⇧C          compact session
+⌃W           close tab                ⌃L           clear session
+⌃,           model / params           ⌃E           edit ⇄ view current file
+⌃G           git panel                ⌃U           upload / attach</div>
+
+</div>
+</body>
+</html>

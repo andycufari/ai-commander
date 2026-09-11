@@ -8,6 +8,7 @@ import { Event, Intent, type Config, type Rules } from "@aicommander/protocol";
 import { loadConfig, ensureProjectDir } from "./config.js";
 import { PathEscapeError, resolveInRoot } from "./paths.js";
 import { SessionStore } from "./sessions.js";
+import { Loop } from "./loop.js";
 import { handleIntent, type Ctx } from "./intents.js";
 
 export interface ServeOptions {
@@ -59,7 +60,8 @@ export async function serve(opts: ServeOptions): Promise<Serving> {
     for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(line);
   };
 
-  const ctx: Ctx = { root, config, rules, sessions, broadcast, send: broadcast };
+  const loop = new Loop({ root, config, sessions, emit: broadcast });
+  const ctx: Ctx = { root, config, rules, sessions, loop, broadcast, send: broadcast };
 
   const server = createServer((req, res) => {
     void httpRoute(req, res, root, opts.staticDir).catch((err: unknown) => {

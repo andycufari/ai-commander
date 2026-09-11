@@ -10,6 +10,7 @@ import {
 import { projectDir } from "./config.js";
 import { resolveInRoot, toRepoPath } from "./paths.js";
 import { SessionStore } from "./sessions.js";
+import type { Loop } from "./loop.js";
 import { join } from "node:path";
 
 const run = promisify(execFile);
@@ -19,6 +20,7 @@ export interface Ctx {
   config: Config;
   rules: Rules;
   sessions: SessionStore;
+  loop: Loop;
   /** To every connected client — state the UI must agree on. */
   broadcast: (event: Event) => void;
   /** To the client that sent the intent — replies and errors. */
@@ -74,9 +76,27 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
     case "session.close":
       return;
 
-    // The loop intents land with the brain client (M0 item 4) and the guards (M2).
-    case "session.send":
-    case "session.cancel":
+    case "session.send": {
+      // Running: queue it for the next tool boundary (guard 5). Idle: start a turn.
+      if (ctx.loop.isRunning(intent.sessionId)) {
+        ctx.loop.queue(intent.sessionId, intent.text);
+        return;
+      }
+      // Deliberately not awaited: the turn streams events for its whole life, and the
+      // socket must stay responsive so Esc can cancel it.
+      void ctx.loop.send(intent.sessionId, intent.text).catch((err: unknown) => {
+        ctx.broadcast(ev("error", { message: err instanceof Error ? err.message : String(err) }));
+      });
+      return;
+    }
+
+    case "session.cancel": {
+      if (!ctx.loop.cancel(intent.sessionId)) {
+        ctx.send(ev("toast", { level: "info", text: "nothing running" }));
+      }
+      return;
+    }
+
     case "session.rewind":
     case "session.dropGroup":
     case "session.dropToolOutput":

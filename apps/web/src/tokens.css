@@ -1,0 +1,13 @@
+/* Palette and tokens — copied verbatim from docs/mockups/harness-layouts-v0.html :root.
+   §13: if it doesn't look like the mockups, it's wrong. Change the mockup first. */
+:root {
+  --bg:#0e1210;        /* deep green-black, not neutral black */
+  --panel:#131916;
+  --line:#26312b;
+  --ink:#c9d6cc;       /* phosphor, desaturated */
+  --dim:#6f8074;
+  --hi:#8ee6a1;        /* phosphor green — brand */
+  --amber:#e6b35a;     /* the brain speaks in amber */
+  --sel:#1c2a22;
+  --mono:"JetBrains Mono","IBM Plex Mono","SF Mono",Menlo,Consolas,monospace;
+}
