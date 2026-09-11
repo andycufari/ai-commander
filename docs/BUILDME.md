@@ -85,6 +85,7 @@ session.dropGroup { sessionId, groupId } session.dropToolOutput { sessionId, gro
 session.compact { sessionId }            session.clear { sessionId }
 permission.answer { requestId, answer: "once"|"session"|"deny", editedCommand? }
 ask.answer { requestId, choice }
+panel.opened { requestId, outcome: "opened"|"already-open"|"not-found", side?, view? }
 options.set { scope: "session"|"project"|"global", sessionId?, patch }
 fs.list { path }  fs.read { path }  fs.write { path, content, baseHash }  fs.mkdir  fs.rename  fs.copy  fs.move  fs.delete { path, confirm }
 git.status  git.log { path?, n }  git.diff { path? }  git.commit { message }  git.checkout { ref }
@@ -103,7 +104,7 @@ tool.end { callId, ok, summary, outputPath?, truncated }
 permission.request { requestId, sessionId, tool, command, rule, reason, level }
 ask.request { requestId, sessionId, question, options[] }
 job.start/job.output/job.end { jobId, ... }                // background shell jobs
-open_in_panel { path, viewer?, mode: "view"|"edit", target: "other"|"left"|"right" }
+open_in_panel { path, viewer?, mode: "view"|"edit", target: "other"|"left"|"right", requestId? }
 mention.add { text }                                       // viewer → prompt
 fs.changed { paths[] }                                     // chokidar
 git.changed { branch, dirty, ahead }

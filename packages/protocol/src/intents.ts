@@ -53,6 +53,15 @@ export const PermissionAnswerIntent = intent("permission.answer", {
 });
 export const AskAnswer = intent("ask.answer", { requestId: z.string(), choice: z.string() });
 
+/** What the UI did with an `open_in_panel` request, so the brain is told (§5). */
+export const PanelOpened = intent("panel.opened", {
+  requestId: z.string(),
+  outcome: z.enum(["opened", "already-open", "not-found"]),
+  /** Which panel it landed in, for the tool result's wording. */
+  side: z.enum(["left", "right"]).optional(),
+  view: z.string().optional(),
+});
+
 export const OptionsSet = intent("options.set", {
   scope: OptionsScope,
   sessionId: z.string().optional(),
@@ -89,7 +98,7 @@ export const Intent = z.discriminatedUnion("type", [
   SessionCreate, SessionOpen, SessionClose, SessionRename, SessionDelete,
   SessionSend, SessionCancel, SessionRewind, SessionDropGroup, SessionDropToolOutput,
   SessionCompact, SessionClear,
-  PermissionAnswerIntent, AskAnswer, OptionsSet,
+  PermissionAnswerIntent, AskAnswer, PanelOpened, OptionsSet,
   FsList, FsRead, FsWrite, FsMkdir, FsRename, FsCopy, FsMove, FsDelete,
   GitStatus, GitLog, GitDiff, GitCommit, GitCheckout,
   WorkspaceSet, WorkspaceGet, ViewerList, ViewerInstall,

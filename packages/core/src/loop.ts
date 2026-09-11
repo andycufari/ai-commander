@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { Config, Event, LogEntry, SessionMeta, ToolResult } from "@aicommander/protocol";
+import { stat } from "node:fs/promises";
+import { ToolArgs, type Config, type Event, type LogEntry, type ToolResult } from "@aicommander/protocol";
+import { resolveInRoot } from "./paths.js";
 import { BrainClient, BrainError, type BrainMessage, type ToolSpec } from "./brain.js";
 import { projectDir } from "./config.js";
 import { runTool, toolSpecs, type ToolCtx } from "./tools.js";
@@ -11,8 +13,15 @@ import { SessionStore } from "./sessions.js";
 
 const CORE_ENABLED = [
   "read_file", "write_file", "edit_file", "glob", "grep", "shell", "git",
-  "list_skills", "read_skill",
+  "open_in_panel", "list_skills", "read_skill",
 ] as const;
+
+/** What the UI reports back about an open_in_panel request. */
+export interface PanelOutcome {
+  outcome: "opened" | "already-open" | "not-found";
+  side?: "left" | "right";
+  view?: string;
+}
 
 export interface LoopDeps {
   root: string;
@@ -34,6 +43,8 @@ interface Running {
 
 export class Loop {
   private readonly running = new Map<string, Running>();
+  /** open_in_panel calls waiting for the UI to say what it did. */
+  private readonly panelWaits = new Map<string, (r: PanelOutcome) => void>();
 
   constructor(private readonly deps: LoopDeps) {}
 
@@ -47,6 +58,93 @@ export class Loop {
     if (!run) return false;
     run.controller.abort();
     return true;
+  }
+
+  /** The UI answering an open_in_panel request (§5). */
+  resolvePanel(requestId: string, outcome: PanelOutcome): boolean {
+    const waiter = this.panelWaits.get(requestId);
+    if (!waiter) return false;
+    this.panelWaits.delete(requestId);
+    waiter(outcome);
+    return true;
+  }
+
+  /**
+   * open_in_panel runs here rather than in tools.ts: only the UI knows which panel is
+   * focused and what is already open, so the tool emits an event and waits for the
+   * answer. A UI that never replies must not wedge the loop, hence the timeout.
+   */
+  private async openInPanel(
+    sessionId: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<ToolResult> {
+    const parsed = ToolArgs.open_in_panel.safeParse(args);
+    if (!parsed.success) {
+      return { ok: false, summary: "bad arguments", content: parsed.error.message, truncated: false };
+    }
+    const { path, mode, viewer } = parsed.data;
+
+    // Check the file before asking the UI, so "not found" is authoritative.
+    try {
+      const abs = await resolveInRoot(this.deps.root, path);
+      const info = await stat(abs);
+      if (!info.isFile()) {
+        return { ok: false, summary: `${path} is not a file`, content: `${path} is a directory.`, truncated: false };
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        summary: `no such file: ${path}`,
+        content: err instanceof Error ? err.message : `Cannot open ${path}.`,
+        truncated: false,
+      };
+    }
+
+    const requestId = randomUUID().slice(0, 8);
+    const outcome = await new Promise<PanelOutcome>((resolve) => {
+      const timer = setTimeout(() => {
+        this.panelWaits.delete(requestId);
+        resolve({ outcome: "opened" });
+      }, 3000);
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        this.panelWaits.delete(requestId);
+        resolve({ outcome: "opened" });
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      this.panelWaits.set(requestId, (r) => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        resolve(r);
+      });
+      this.deps.emit(ev("open_in_panel", { path, mode: mode ?? "view", viewer, target: "other", requestId }));
+    });
+
+    const where = outcome.side ? `the ${outcome.side} panel` : "the other panel";
+    switch (outcome.outcome) {
+      case "already-open":
+        return {
+          ok: true,
+          summary: `${path} already open`,
+          content: `${path} was already open in ${where}; brought it to the front.`,
+          truncated: false,
+        };
+      case "not-found":
+        return {
+          ok: false,
+          summary: `could not open ${path}`,
+          content: `The user interface could not open ${path}.`,
+          truncated: false,
+        };
+      default:
+        return {
+          ok: true,
+          summary: `opened ${path}`,
+          content: `${path} is now showing in ${where}. The user can see it.`,
+          truncated: false,
+        };
+    }
   }
 
   /** A message sent while the loop runs is queued, not dropped (§6 guard 5). */
@@ -140,7 +238,10 @@ export class Loop {
             outPath: (id) => join(projectDir(root), "out", `${id}.txt`),
           };
 
-          const res: ToolResult = await runTool(call.name, call.args, ctx);
+          const res: ToolResult =
+            call.name === "open_in_panel"
+              ? await this.openInPanel(sessionId, call.args, controller.signal)
+              : await runTool(call.name, call.args, ctx);
 
           emit(ev("tool.end", {
             callId: call.callId,

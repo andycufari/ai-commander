@@ -1,4 +1,5 @@
 import { randomUUID } from "./id.js";
+import { toolPath } from "./mentions.js";
 import type { Config, Event, Group, Intent, SessionMeta } from "@aicommander/protocol";
 
 /**
@@ -16,6 +17,8 @@ export interface ChatRow {
   summary?: string;
   ok?: boolean;
   running?: boolean;
+  /** Set when the tool acts on a file, so the row links to it (§10). */
+  path?: string;
 }
 
 export interface UiState {
@@ -98,6 +101,7 @@ export function reduce(state: UiState, event: Event): UiState {
           callId: event.callId,
           name: event.name,
           args: summarizeArgs(event.args),
+          path: toolPath(event.name, event.args),
           running: true,
         }],
       };

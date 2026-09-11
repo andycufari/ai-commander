@@ -242,7 +242,9 @@ html, body, #root {
 .tool.err { color: var(--red); }
 .tool.err i { color: var(--red); }
 .spin { color: var(--amber); }
-.m { color: var(--hi); }
+/* clickable mention — a path the user can open (§10) */
+.m { color: var(--hi); cursor: pointer; text-decoration: none; outline: none; }
+.m:hover, .m:focus { text-decoration: underline; }
 .sk { color: var(--amber); }
 
 /* prompt attached to the bottom, grows to 40% of the panel then scrolls */

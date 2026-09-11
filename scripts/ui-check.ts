@@ -37,6 +37,23 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 
 const group = (name: string): void => console.log(`\n${C.dim}${name}${C.off}`);
 
+/**
+ * Every key in this file goes through the browser's real input pipeline.
+ * Synthetic KeyboardEvents are untrusted, and editors like CodeMirror ignore those —
+ * a probe that dispatches one proves the handler exists, not that a user can reach it.
+ */
+async function key(
+  page: Page,
+  k: string,
+  opts: { ctrl?: boolean; shift?: boolean; focus?: string; settle?: number } = {},
+): Promise<void> {
+  if (opts.focus) {
+    await page.eval(`document.querySelector(${JSON.stringify(opts.focus)})?.focus()`);
+  }
+  await page.keyPress(k, { ctrl: opts.ctrl, shift: opts.shift });
+  await sleep(opts.settle ?? 200);
+}
+
 /* ------------------------------------------------------------------ *
  * Reusable layout assertions — the regression net proper.
  * ------------------------------------------------------------------ */
@@ -243,10 +260,7 @@ export async function assertSurvivesResize(page: Page, viewSelector: string, lab
   check(`${label} is laid out`, before.w > 0 && before.h > 0, before);
 
   // Move the gutter two steps and make sure the view followed its panel.
-  for (let i = 0; i < 2; i += 1) {
-    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',ctrlKey:true,bubbles:true}))`);
-    await sleep(150);
-  }
+  for (let i = 0; i < 2; i += 1) await key(page, "ArrowLeft", { ctrl: true, settle: 160 });
   const narrowed = await measure();
   check(`${label} follows the gutter`, narrowed.w > 0 && narrowed.w !== before.w, { before, narrowed });
   check(`${label} stays inside its panel`, narrowed.inPanel, narrowed);
@@ -255,19 +269,14 @@ export async function assertSurvivesResize(page: Page, viewSelector: string, lab
   // Collapse and restore. ⌃B hides the *other* panel, so this view is either squeezed
   // to nothing (it was the one collapsed) or widened — either is fine. What must hold
   // is that the element still exists, nothing overflows, and it comes back afterwards.
-  await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'b',ctrlKey:true,bubbles:true}))`);
-  await sleep(250);
+  await key(page, "b", { ctrl: true, settle: 250 });
   const collapsed = await page.eval<boolean>(
     `!!document.querySelector(${JSON.stringify(viewSelector)})`);
   check(`${label} still exists through a panel collapse`, collapsed, { collapsed });
   await assertNoOverflow(page);
 
-  await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'b',ctrlKey:true,bubbles:true}))`);
-  await sleep(250);
-  for (let i = 0; i < 2; i += 1) {
-    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',ctrlKey:true,bubbles:true}))`);
-    await sleep(150);
-  }
+  await key(page, "b", { ctrl: true, settle: 250 });
+  for (let i = 0; i < 2; i += 1) await key(page, "ArrowRight", { ctrl: true, settle: 160 });
   const restored = await measure();
   check(`${label} returns to its size when restored`, Math.abs(restored.w - before.w) <= 2, { before, restored });
   await assertTitlesNotClipped(page);
@@ -277,13 +286,10 @@ export async function assertSurvivesResize(page: Page, viewSelector: string, lab
 async function openViaFiles(page: Page, steps: string[]): Promise<void> {
   await page.reload();
   await sleep(2500);
-  await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}))`);
-  await sleep(200);
-  await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',ctrlKey:true,bubbles:true}))`);
-  await sleep(900);
-  for (const key of steps) {
-    await page.eval(`document.querySelector('.files')?.dispatchEvent(new KeyboardEvent('keydown',{key:${JSON.stringify(key)},bubbles:true}))`);
-    await sleep(key === "Enter" ? 900 : 250);
+  await key(page, "Tab");
+  await key(page, "t", { ctrl: true, settle: 900 });
+  for (const k of steps) {
+    await key(page, k, { focus: ".files", settle: k === "Enter" ? 900 : 250 });
   }
 }
 
@@ -311,11 +317,9 @@ async function main(): Promise<void> {
 
     group("gutter keys");
     // ⌃→ widens the left panel by one 5% step (§10/§11).
-    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',ctrlKey:true,bubbles:true}))`);
-    await sleep(200);
+    await key(page, "ArrowRight", { ctrl: true });
     await assertGutterAt(page, 0.55);
-    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',ctrlKey:true,bubbles:true}))`);
-    await sleep(200);
+    await key(page, "ArrowLeft", { ctrl: true });
     await assertGutterAt(page, 0.5);
     // Still no overflow after resizing.
     await assertNoOverflow(page);
@@ -337,8 +341,7 @@ async function main(): Promise<void> {
     const start = await tabState();
     check("a lone tab hides the strip", start.strip === 0, start);
 
-    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',ctrlKey:true,bubbles:true}))`);
-    await sleep(250);
+    await key(page, "t", { ctrl: true, settle: 250 });
     const opened = await tabState();
     check("⌃T opens a tab and shows the strip", opened.strip === 2, opened);
     check("the new tab takes the panel title", opened.title.startsWith("files"), opened.title);
@@ -346,16 +349,13 @@ async function main(): Promise<void> {
     await assertTitlesNotClipped(page);
     await assertNoOverflow(page);
 
-    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',ctrlKey:true,bubbles:true}))`);
-    await sleep(250);
+    await key(page, "Tab", { ctrl: true, settle: 250 });
     const cycled = await tabState();
     check("⌃⇥ cycles back to chat", cycled.title.startsWith("chat"), cycled.title);
     check("the F-bar switches back to chat keys", cycled.bar.includes("sessions"), cycled.bar);
 
-    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',ctrlKey:true,bubbles:true}))`);
-    await sleep(200);
-    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'w',ctrlKey:true,bubbles:true}))`);
-    await sleep(250);
+    await key(page, "Tab", { ctrl: true });
+    await key(page, "w", { ctrl: true, settle: 250 });
     const closed = await tabState();
     check("⌃W closes the tab and the strip hides again", closed.strip === 0, closed);
     check("the shell is still usable after closing a tab",
@@ -368,15 +368,11 @@ async function main(): Promise<void> {
     await page.reload();
     await sleep(2500);
     // Open a files tab in the right panel and drive the NC keys.
-    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}))`);
-    await sleep(200);
-    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',ctrlKey:true,bubbles:true}))`);
-    await sleep(900);
+    await key(page, "Tab");
+    await key(page, "t", { ctrl: true, settle: 900 });
 
-    const fileKey = async (k: string, ctrl = false): Promise<void> => {
-      await page.eval(`document.querySelector('.files')?.dispatchEvent(new KeyboardEvent('keydown',{key:${JSON.stringify(k)},bubbles:true,ctrlKey:${ctrl}}))`);
-      await sleep(220);
-    };
+    const fileKey = (k: string, ctrl = false): Promise<void> =>
+      key(page, k, { ctrl, focus: ".files", settle: 240 });
 
     const names = await page.eval<string[]>(
       `[...document.querySelectorAll('.files .row:not(.up) .nm')].map(n => n.textContent.trim())`);
@@ -445,9 +441,7 @@ async function main(): Promise<void> {
     check("the editor tab is titled by the file", preview.title.includes("NOTES.md"), preview.title);
 
     // ⌃E toggles preview → editor in the same tab.
-    await page.eval(`(() => { const el = document.querySelector('.body.md'); el.focus();
-      el.dispatchEvent(new KeyboardEvent('keydown',{key:'e',ctrlKey:true,bubbles:true})); })()`);
-    await sleep(700);
+    await key(page, "e", { ctrl: true, focus: ".body.md", settle: 800 });
     const edited = await page.eval<{ cm: boolean; tabs: number }>(`(() => ({
       cm: !!document.querySelector('.body.cm .cm-editor'),
       tabs: document.querySelectorAll('.cols > .blk:first-child .tab').length,
@@ -468,16 +462,50 @@ async function main(): Promise<void> {
     check("image starts fitted", /\(fit\)/.test(img.caption), img.caption);
     await assertSurvivesResize(page, ".body.image", "image viewer");
 
+    group("mentions");
+    await page.reload();
+    await sleep(2500);
+    await page.fill(".prompt textarea", "look at @docs/NOTES.md and @nothing here");
+    await key(page, "Enter", { settle: 1200 });
+    const mentions = await page.eval<{ links: string[]; text: string }>(`(() => {
+      const row = document.querySelectorAll('.u')[document.querySelectorAll('.u').length - 1];
+      return {
+        links: [...(row?.querySelectorAll('.m') ?? [])].map(m => m.textContent ?? ''),
+        text: row?.textContent ?? '',
+      };
+    })()`);
+    check("an @path becomes a link", mentions.links.includes("@docs/NOTES.md"), mentions);
+    check("a non-path @word stays prose", !mentions.links.some((l) => l.includes("nothing")), mentions);
+    check("the prose around a mention survives", mentions.text.includes("look at"), mentions.text);
+
+    // Clicking a mention runs the same path as ⏎ in the files view: it opens in the
+    // other panel and must not steal focus.
+    const focusBefore = await page.eval<number>(
+      `[...document.querySelectorAll('.cols > .blk')].findIndex(b => b.classList.contains('focus'))`);
+    await page.eval(`document.querySelector('.u .m')?.click()`);
+    await sleep(1200);
+    const afterClick = await page.eval<{ right: string; focus: number; hasView: boolean }>(`(() => {
+      const blks = [...document.querySelectorAll('.cols > .blk')];
+      return {
+        right: blks[1]?.querySelector('.t')?.textContent ?? '',
+        focus: blks.findIndex(b => b.classList.contains('focus')),
+        hasView: !!blks[1]?.querySelector('.body.md, .body.cm, .body.image'),
+      };
+    })()`);
+    check("clicking a mention opens it in the other panel",
+      afterClick.hasView && afterClick.right.includes("NOTES.md"), afterClick);
+    check("clicking a mention does not steal focus", afterClick.focus === focusBefore,
+      { before: focusBefore, after: afterClick.focus });
+    await assertNoOverflow(page);
+
     group("focus");
     await page.reload();
     await sleep(2500);
     const before = await page.eval<string>("document.querySelector('.cols > .blk.focus')?.className ?? ''");
-    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}))`);
-    await sleep(200);
+    await key(page, "Tab");
     const after = await page.eval<string>("[...document.querySelectorAll('.cols > .blk')].findIndex(e=>e.classList.contains('focus'))");
     check("Tab moves focus to the other panel", String(after) === "1", { before, afterIndex: after });
-    await page.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}))`);
-    await sleep(200);
+    await key(page, "Tab");
 
     group("layout");
     await page.reload();

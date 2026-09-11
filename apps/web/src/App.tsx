@@ -8,6 +8,7 @@ import { Editor } from "./Editor.js";
 import { ImageViewer } from "./ImageViewer.js";
 import { defaultRegistry } from "./viewers.js";
 import { addChips, removeChip, type Chip } from "./chips.js";
+import { linkifyMentions } from "./mentions.js";
 import type { Attachment } from "@aicommander/protocol";
 
 /** The shell: top line, two tabbed panels with a draggable gutter, status line,
@@ -24,9 +25,15 @@ export function App(): JSX.Element {
   );
   const conn = useRef<Connection>();
 
+  /** Handlers that the socket callback needs but that change every render. */
+  const live = useRef<{ onOpenInPanel: (e: Extract<Event, { type: "open_in_panel" }>) => void }>();
+
   useEffect(() => {
     const c = connect(
-      (e) => dispatch(e),
+      (e) => {
+        if (e.type === "open_in_panel") live.current?.onOpenInPanel(e);
+        dispatch(e);
+      },
       () => dispatch({ type: "__conn", connected: true }),
       () => dispatch({ type: "__conn", connected: false }),
     );
@@ -64,6 +71,8 @@ export function App(): JSX.Element {
   const running = state.status === "running";
   const colsRef = useRef<HTMLDivElement>(null);
   const layout = usePanelLayout({});
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
   const drag = useGutterDrag(colsRef, layout.setGutter);
 
   // Each panel is a tabbed view host (§10). The chat tab is always there to start.
@@ -94,32 +103,70 @@ export function App(): JSX.Element {
     layout.setFocus(side);
   }, [left, right, layout]);
 
-  /** ⏎ on a file: the registry decides which view opens it, in the *other* panel (§5). */
-  const openFile = useCallback((fromSide: PanelSide, path: string) => {
+  /**
+   * Open a file in a panel — the single code path for ⏎ in the files view, a click on
+   * a mention, and the brain's open_in_panel (§5). It always targets the panel that is
+   * *not* the source, never moves focus, and activates an existing tab for the same
+   * path rather than opening a second one.
+   */
+  const openFile = useCallback((
+    fromSide: PanelSide,
+    path: string,
+    mode?: "view" | "edit",
+  ): { outcome: "opened" | "already-open"; side: PanelSide; view: string } => {
     const entry = defaultRegistry.resolve(path);
-    const target = fromSide === "left" ? right : left;
+    // mode "edit" overrides the registry's choice of a rendered view (§5).
+    const view = mode === "edit" ? "editor" : entry.view;
+    const side: PanelSide = fromSide === "left" ? "right" : "left";
+    const target = side === "left" ? left : right;
+
+    const existing = target.tabs.find((t) => t.path === path && t.view === view);
+    if (existing) {
+      target.select(existing.id);
+      return { outcome: "already-open", side, view };
+    }
     target.open({
-      view: entry.view,
+      view,
       title: path.split("/").pop() ?? path,
       path,
       viewer: entry.name,
-      mode: entry.mode,
+      mode: mode ?? entry.mode,
     });
+    return { outcome: "opened", side, view };
   }, [left, right]);
+
+  /**
+   * The socket is opened once on mount, so its callback would capture the first
+   * render's `openFile` forever. Routing through a ref that every render refreshes
+   * keeps the handler current without re-subscribing the socket.
+   */
+  live.current = {
+    onOpenInPanel: (e) => {
+      // `target` names where the file should land, but openFile opens *away* from the
+      // side it is given — so pass the opposite. "other" means away from focus.
+      const source: PanelSide = e.target === "left" ? "right"
+        : e.target === "right" ? "left"
+        : layoutRef.current.focus;
+      const result = openFile(source, e.path, e.mode);
+      // Tell the loop what actually happened, so its tool result is truthful (§5).
+      if (e.requestId) {
+        conn.current?.send({ type: "panel.opened", requestId: e.requestId, ...result });
+      }
+    },
+  };
 
   // Global keys (§11): Tab swaps focus, ⌃←/→ resizes, ⌃B collapses, Esc cancels.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      const typing = (e.target as HTMLElement | null)?.tagName === "TEXTAREA";
-
       if (e.key === "Escape" && state.status === "running") {
         e.preventDefault();
         cancel();
         return;
       }
-      // Tab swaps panels, but must still indent inside the prompt — and must not
-      // swallow ⌃⇥, which cycles tabs within the focused panel.
-      if (e.key === "Tab" && !typing && !e.ctrlKey) {
+      // §11: Tab always swaps panels, including from inside the prompt — that is its
+      // main use. The prompt takes newlines with ⇧⏎, so it never needs Tab itself.
+      // ⌃⇥ is excluded: it cycles tabs within the focused panel.
+      if (e.key === "Tab" && !e.ctrlKey) {
         e.preventDefault();
         layout.swapFocus();
         return;
@@ -173,7 +220,7 @@ export function App(): JSX.Element {
       case "chat":
         return (
           <>
-            <Chat rows={state.rows} running={running} />
+            <Chat rows={state.rows} running={running} onOpen={(p) => openFile(side, p)} />
             <Prompt
               onSend={send} running={running} queued={state.queued}
               focused={layout.focus === side}
@@ -364,7 +411,9 @@ const hostOf = (endpoint: string): string => {
 
 const fmtK = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 
-function Chat({ rows, running }: { rows: ChatRow[]; running: boolean }): JSX.Element {
+function Chat({
+  rows, running, onOpen,
+}: { rows: ChatRow[]; running: boolean; onOpen: (path: string) => void }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
 
@@ -381,24 +430,53 @@ function Chat({ rows, running }: { rows: ChatRow[]; running: boolean }): JSX.Ele
 
   return (
     <div className="body wrap" ref={ref} onScroll={onScroll}>
-      {rows.map((r, i) => <Row key={r.callId ?? i} row={r} />)}
+      {rows.map((r, i) => <Row key={r.callId ?? i} row={r} onOpen={onOpen} />)}
       {running && rows[rows.length - 1]?.kind !== "tool" && <div className="b"><span className="spin">⠹</span></div>}
     </div>
   );
 }
 
-function Row({ row }: { row: ChatRow }): JSX.Element {
+function Row({ row, onOpen }: { row: ChatRow; onOpen: (path: string) => void }): JSX.Element {
   if (row.kind === "tool") {
     const cls = row.ok === false ? "tool err" : "tool";
     return (
       <div className={cls}>
         {row.running && <span className="spin">⠹ </span>}
-        {row.name} <i>{row.args}</i>
+        {row.name}{" "}
+        {row.path
+          ? <i><Mention path={row.path} label={row.args ?? row.path} onOpen={onOpen} /></i>
+          : <i>{row.args}</i>}
         {row.summary ? `  ${row.summary}` : row.running ? " …" : ""}
       </div>
     );
   }
-  return <div className={row.kind === "user" ? "u" : "b"}>{row.text}</div>;
+  return (
+    <div className={row.kind === "user" ? "u" : "b"}>
+      {linkifyMentions(row.text).map((seg, i) =>
+        seg.path
+          ? <Mention key={i} path={seg.path} label={seg.text} onOpen={onOpen} />
+          : <span key={i}>{seg.text}</span>,
+      )}
+    </div>
+  );
+}
+
+/** A clickable path — the same code path as ⏎ in the files view. */
+function Mention({
+  path, label, onOpen,
+}: { path: string; label: string; onOpen: (path: string) => void }): JSX.Element {
+  return (
+    <span
+      className="m"
+      role="link"
+      tabIndex={0}
+      title={`open ${path}`}
+      onClick={() => onOpen(path)}
+      onKeyDown={(e) => { if (e.key === "Enter") onOpen(path); }}
+    >
+      {label}
+    </span>
+  );
 }
 
 function Prompt({

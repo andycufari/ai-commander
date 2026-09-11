@@ -89,7 +89,13 @@ export const TOOL_DESCRIPTIONS: Record<keyof typeof ToolArgs, string> = {
   shell: "Run a shell command in the repo. On timeout the process keeps running as a background job and you get a jobId.",
   job: "Inspect or kill a background shell job.",
   git: "Run a git action: status, log, diff, add, commit, checkout, branch, stash, push.",
-  open_in_panel: "Open a repo file in the panel the user is not focused on. Never steals focus.",
+  open_in_panel:
+    "Show a file to the user. Call this when you want them to SEE a file, not just when " +
+    "you have read it: the file you just changed, the image or diagram you are describing, " +
+    "the config you are asking them about. It opens in whichever panel they are not using " +
+    "and never steals their focus or interrupts their typing, so it is cheap to call — but " +
+    "it is for files worth their attention, not every file you touch. " +
+    "mode \"view\" renders it (markdown, images); \"edit\" opens it in the editor.",
   ask_user: "Ask the user a question with a fixed set of choices. The loop pauses until they answer.",
   list_skills: "List available skills with their descriptions.",
   read_skill: "Read the full text of a skill by name.",

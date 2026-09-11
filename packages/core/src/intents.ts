@@ -97,6 +97,15 @@ export async function handleIntent(intent: Intent, ctx: Ctx): Promise<void> {
       return;
     }
 
+    case "panel.opened": {
+      ctx.loop.resolvePanel(intent.requestId, {
+        outcome: intent.outcome,
+        side: intent.side,
+        view: intent.view,
+      });
+      return;
+    }
+
     case "session.rewind":
     case "session.dropGroup":
     case "session.dropToolOutput":

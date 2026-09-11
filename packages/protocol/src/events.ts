@@ -76,6 +76,9 @@ export const OpenInPanel = event("open_in_panel", {
   viewer: z.string().optional(),
   mode: PanelMode.default("view"),
   target: PanelTarget.default("other"),
+  /** Set when the brain called the tool: the UI answers with panel.opened so the
+   *  tool result can say what actually happened. */
+  requestId: z.string().optional(),
 });
 /** Viewer or files view pushing text into the prompt. */
 export const MentionAdd = event("mention.add", { text: z.string() });
