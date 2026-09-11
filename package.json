@@ -13,7 +13,8 @@
     "typecheck": "pnpm -r typecheck",
     "dev": "tsx packages/core/src/cli.ts serve .",
     "chat": "tsx scripts/chat.ts",
-    "dev:web": "pnpm --filter @aicommander/web dev"
+    "dev:web": "pnpm --filter @aicommander/web dev",
+    "ui-check": "tsx scripts/ui-check.ts"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
